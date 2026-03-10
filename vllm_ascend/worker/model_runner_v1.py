@@ -212,7 +212,7 @@ class NPUModelRunner(GPUModelRunner):
         self.dycp_size = self.parallel_config.dp_per_domain
         self.dycp_rank = 0 if self.dycp_size <= 1 else get_dycp_group().rank_in_group
         kv_role = getattr(vllm_config.kv_transfer_config, "kv_role", None)
-        if self.dycp_rank > 0 and kv_role == 'kv_producer':
+        if self.dycp_size > 0 and kv_role == 'kv_producer':
             self.pcp_size = self.dycp_size
             self.pcp_rank = self.dycp_rank
         self.sampler = AscendSampler()
