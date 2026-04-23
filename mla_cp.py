@@ -2,7 +2,6 @@ from typing import ClassVar, Optional, Tuple, TypeVar
 
 import numpy as np
 import torch
-from vllm.logger import logger
 import torch_npu
 from vllm.config import VllmConfig
 from vllm.distributed import (
@@ -11,6 +10,7 @@ from vllm.distributed import (
     get_decode_context_model_parallel_world_size,
     get_pcp_group,
 )
+from vllm.logger import logger
 from vllm.forward_context import ForwardContext, get_forward_context
 from vllm.utils.math_utils import cdiv, round_down
 from vllm.v1.attention.backend import AttentionCGSupport
@@ -289,9 +289,6 @@ class AscendMlaCPMetadataBuilder(AscendMLAMetadataBuilder):
         # [bs, pcp_size, dcp_size]
         num_computed_tokens_of_cp_dcp_array = np.array(num_computed_tokens_of_pcp_dcp)[: self.num_decodes_flatten]
 
-        # cp_seq_len = num_computed_tokens_of_cp_dcp_array[:, self.pcp_rank, self.dcp_rank]
-        # cp_seq_len = torch.tensor(cp_seq_len, dtype=torch.int32)
-        # decode_metadata.cp_seq_len = cp_seq_len.tolist()
         cp_seq_len = get_dcp_local_seq_lens(decode_metadata.seq_lens,
                                             self.dycp_size,
                                             self.dycp_rank,
@@ -357,7 +354,7 @@ class AscendMlaCPImpl(AscendMLAImpl):
                 self.prefill_dycp_rank = self.dycp_rank
             else:
                 self.prefill_dycp_size = 1
-                self.prefill_dycp_rank = 1
+                self.prefill_dycp_rank = 0
             self.common_pcp_size = self.dycp_size if self.prefill_dycp_size > 1 else self.pcp_size
             self.common_pcp_rank = self.dycp_rank if self.prefill_dycp_size > 1 else self.pcp_rank
         except AssertionError:
@@ -487,28 +484,7 @@ class AscendMlaCPImpl(AscendMLAImpl):
                     workspace = graph_params.workspaces.get(graph_key)
                     break
 
-        if len(attn_params) == 0 or len(handles) == 0 or len(events) == 0:
-            logger.warning_once(
-                "AscendMlaCPImpl.update_graph_params found empty graph params for key %s "
-                "(num_tokens=%s, num_dycp_reqs=%s).",
-                graph_key,
-                num_tokens,
-                num_dycp_reqs,
-            )
-            return
-
         num_layers = len(forward_context.attn_metadata)
-        if len(attn_params) < num_layers or len(handles) < num_layers or len(events) < num_layers:
-            logger.warning_once(
-                "AscendMlaCPImpl.update_graph_params layer count mismatch (insufficient): "
-                "metadata=%s, params=%s, handles=%s, events=%s, key=%s.",
-                num_layers,
-                len(attn_params),
-                len(handles),
-                len(events),
-                graph_key,
-            )
-            return
 
         # If this key contains multiple capture rounds, pick the chunk that
         # matches current decode token shape first.
@@ -585,6 +561,7 @@ class AscendMlaCPImpl(AscendMLAImpl):
                     target_kv_len,
                     template_seq=captured_actual_seq_lengths_kv,
                 )
+                actual_seq_lengths_kv = actual_seq_lengths_kv.tolist()
 
                 # Only TND layout uses query cumulative lengths. For BNSD path
                 # this argument should stay as captured (typically None).
@@ -636,57 +613,22 @@ class AscendMlaCPImpl(AscendMLAImpl):
         need_gather_q_kv: bool = False,
         output: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        assert output is not None, "Output tensor must be provided."
         if attn_metadata is None:
             # Profiling run.
             for layer in self.layer_sharding_kwargs or []:
                 if is_hidden_layer(layer):
                     reach_layer_for_shard_weight_series(layer)
             return output.fill_(0)
+
         num_decode_tokens = attn_metadata.num_decode_tokens
-        if self.common_pcp_size > 1 and attn_metadata.num_dycp_reqs and (attn_metadata.decode is None or attn_metadata.decode == 0):
-            dycp_metadata = attn_metadata.dycp_metadata
-            dp_metadata = attn_metadata.dp_metadata
-            if dycp_metadata:
-                cp_hidden_states = hidden_states[num_decode_tokens: num_decode_tokens + attn_metadata.num_actual_tokens_pcp_padded // self.common_pcp_size]
-                self._forward_common(layer_name, cp_hidden_states, kv_cache, dycp_metadata, need_gather_q_kv, output[num_decode_tokens: num_decode_tokens + attn_metadata.num_actual_tokens_pcp_padded // self.common_pcp_size])
-            if dp_metadata:
-                dp_hidden_states = hidden_states[num_decode_tokens + attn_metadata.num_actual_tokens_pcp_padded // self.common_pcp_size :]
-                self._forward_common(layer_name, dp_hidden_states, kv_cache, dp_metadata, need_gather_q_kv, output[num_decode_tokens + attn_metadata.num_actual_tokens_pcp_padded // self.common_pcp_size:])
-        else:
-            self._forward_common(layer_name, hidden_states, kv_cache, attn_metadata, need_gather_q_kv, output)
-        return output
-
-    def _forward_common(
-        self,
-        layer_name,
-        hidden_states: torch.Tensor,  # query in unified attn
-        kv_cache: tuple[torch.Tensor],
-        attn_metadata: M,
-        need_gather_q_kv: bool = False,
-        output: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        assert output is not None, "Output tensor must be provided."
-
         forward_context = get_forward_context()
-        num_actual_tokens = self.get_num_actual_tokens(attn_metadata)
-        assert (
-            attn_metadata.num_decodes is not None
-            and attn_metadata.num_prefills is not None
-            and attn_metadata.num_decode_tokens is not None
-        )
+        o_proj_input_shape = (forward_context.num_tokens, self.num_heads * self.v_head_dim)
+        o_proj_input = torch.empty(o_proj_input_shape, dtype=hidden_states.dtype, device=hidden_states.device)
+        output_padded = output
 
         has_prefill = attn_metadata.num_prefills > 0
         num_decode_tokens = attn_metadata.num_decode_tokens
-        # Inputs and outputs may be padded for CUDA graphs
-        output_padded = output
-        if self.common_pcp_size > 1 and attn_metadata.num_dycp_reqs:
-            o_proj_input_shape = (num_actual_tokens, self.num_heads * self.v_head_dim)
-        elif self.common_pcp_size > 1:
-            o_proj_input_shape = (forward_context.num_tokens - attn_metadata.num_actual_tokens_pcp_padded // self.common_pcp_size,
-            self.num_heads * self.v_head_dim)
-        else:
-            o_proj_input_shape = (forward_context.num_tokens, self.num_heads * self.v_head_dim)
-        o_proj_input = torch.empty(o_proj_input_shape, dtype=hidden_states.dtype, device=hidden_states.device)
 
         # MLA Preprocess
         if self.enable_mlapo and attn_metadata.num_decode_tokens <= MLAPO_MAX_SUPPORTED_TOKENS:
@@ -696,10 +638,116 @@ class AscendMlaCPImpl(AscendMLAImpl):
             decode_preprocess_res, prefill_preprocess_res = self._mla_preprocess_only_decode(
                 hidden_states, kv_cache, attn_metadata
             )
+            q_c = None
+            kv_no_split = None
         else:
-            decode_preprocess_res, prefill_preprocess_res = self._mla_preprocess(
+            q_c, kv_no_split = self._mla_preprocess(
                 layer_name, hidden_states, kv_cache, attn_metadata, need_gather_q_kv
             )
+            # Process for Flash Comm V1
+            q_c = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(q_c.contiguous(), need_gather_q_kv)
+            kv_no_split = torch.ops.vllm.maybe_all_gather_and_maybe_unpad(kv_no_split.contiguous(), need_gather_q_kv)
+            for layer in self.layer_sharding_kwargs or []:
+                if is_hidden_layer(layer):
+                    reach_layer_for_shard_weight_series(layer)
+            decode_preprocess_res = None
+            prefill_preprocess_res = None
+            if has_prefill:
+                wait_for_kv_layer_from_connector(layer_name)
+
+        if self.common_pcp_size > 1 and attn_metadata.num_dycp_reqs and (attn_metadata.decode is None or attn_metadata.decode == 0):
+            dycp_metadata = attn_metadata.dycp_metadata
+            dp_metadata = attn_metadata.dp_metadata
+            if dycp_metadata:
+                cp_q_c = q_c[num_decode_tokens: num_decode_tokens + attn_metadata.num_actual_tokens_pcp_padded // self.common_pcp_size]
+                cp_kv_no_split = kv_no_split[num_decode_tokens: num_decode_tokens + attn_metadata.num_actual_tokens_pcp_padded // self.common_pcp_size]
+                is_prefill = self._forward_common(layer_name, cp_q_c, cp_kv_no_split, kv_cache, dycp_metadata, need_gather_q_kv, o_proj_input[num_decode_tokens: num_decode_tokens + attn_metadata.num_actual_tokens_pcp_padded // self.common_pcp_size])
+            if dp_metadata:
+                dp_q_c = q_c[num_decode_tokens + attn_metadata.num_actual_tokens_pcp_padded // self.common_pcp_size :]
+                dp_kv_no_split = kv_no_split[num_decode_tokens + attn_metadata.num_actual_tokens_pcp_padded // self.common_pcp_size :]
+                is_prefill = self._forward_common(layer_name, dp_q_c, dp_kv_no_split, kv_cache, dp_metadata, need_gather_q_kv, o_proj_input[num_decode_tokens + attn_metadata.num_actual_tokens_pcp_padded // self.common_pcp_size:])
+        else:
+            is_prefill = self._forward_common(layer_name, q_c, kv_no_split, kv_cache, attn_metadata, need_gather_q_kv, o_proj_input, prefill_preprocess_res, decode_preprocess_res)
+        # O proj
+        weight_prefetch_method = get_weight_prefetch_method()
+        weight_prefetch_method.maybe_prefetch_mla_or_sla_weight_in_current_stream(
+            inputs=self.o_proj.weight,
+            dependency=o_proj_input,
+            max_size=MAX_O_PROJ_PREFETCH_SIZE,
+            linear_layer=self.o_proj,
+        )
+        output[...] = self.o_proj(o_proj_input, is_prefill=is_prefill is not None)[0]
+
+        del o_proj_input
+
+        if attn_metadata.num_prefills > 0:
+            maybe_save_kv_layer_to_connector(layer_name, list(kv_cache))
+        return output_padded
+        return output
+
+    def _mla_preprocess(self, layer_name, hidden_states, kv_cache, attn_metadata, need_gather_q_kv):
+        # MLA Preprocess:
+        # 1. Perform fused_qkv_a_proj and q_a_layernorm to obtain q_c and kv_no_split
+        # or
+        #    Perform kv_a_proj_with_mqa to obtain kv_no_split
+        # 2. If need_gather_q_kv, perform all_gather.
+        # 3. Preprocess decode tokens, write kv cache and get:
+        # decode_ql_nope, decode_q_pe, decode_k_pe, decode_k_nope
+        # 4. Preprocess prefill tokens, write kv cache and get:
+        # prefill_q_nope, prefill_q_pe, prefill_k_nope, prefill_k_pe, prefill_value
+        has_decode = attn_metadata.num_decodes > 0
+        has_prefill = attn_metadata.num_prefills > 0
+        if self.fused_qkv_a_proj is not None:
+            weight_prefetch_method = get_weight_prefetch_method()
+            weight_prefetch_method.maybe_prefetch_mla_or_sla_weight_in_current_stream(
+                inputs=self.fused_qkv_a_proj.weight, dependency=hidden_states
+            )
+            qkv_lora = self.fused_qkv_a_proj(hidden_states)[0]
+            q_c, kv_no_split = qkv_lora.split(
+                [self.q_lora_rank, self.kv_lora_rank + self.qk_rope_head_dim],
+                dim=-1,
+            )
+            q_c = self.q_a_layernorm(q_c)  # type: ignore[misc]
+            # allgather need contiguous data
+            kv_no_split = kv_no_split.contiguous()
+        else:
+            q_c = hidden_states
+            kv_no_split = self.kv_a_proj_with_mqa(hidden_states)[0]  # type: ignore[misc]
+
+        return q_c, kv_no_split
+
+    def _forward_common(
+        self,
+        layer_name,
+        q_c: torch.Tensor,
+        kv_no_split: torch.Tensor,
+        kv_cache: tuple[torch.Tensor],
+        attn_metadata: M,
+        need_gather_q_kv: bool = False,
+        o_proj_input: torch.Tensor | None = None,
+        prefill_preprocess_res: PrefillMLAPreprocessResult = None,
+        decode_preprocess_res: DecodeMLAPreprocessResult = None,
+    ) -> torch.Tensor:
+        num_actual_tokens = self.get_num_actual_tokens(attn_metadata)
+        assert (
+            attn_metadata.num_decodes is not None
+            and attn_metadata.num_prefills is not None
+            and attn_metadata.num_decode_tokens is not None
+        )
+
+        num_decode_tokens = attn_metadata.num_decode_tokens
+        has_decode = attn_metadata.num_decodes > 0
+        has_prefill = attn_metadata.num_prefills > 0
+
+        # prefill operation need to splite dp and dycp
+        if decode_preprocess_res is None and prefill_preprocess_res is None:
+            # Preprocess for decode tokens
+            if has_decode:
+                decode_preprocess_res = self.mla_preprocess_decode(q_c, kv_no_split, kv_cache, attn_metadata)
+            # Preprocess for prefill tokens
+            if has_prefill:
+                prefill_preprocess_res = self.mla_preprocess_prefill(q_c, kv_no_split, kv_cache, attn_metadata)
+
         if decode_preprocess_res is not None:
             # MLA Preprocess for decoding
             output_decode = self._forward_decode(
@@ -728,22 +776,7 @@ class AscendMlaCPImpl(AscendMLAImpl):
             )
 
             o_proj_input[num_decode_tokens:num_actual_tokens] = output_prefill
-        # O proj
-        weight_prefetch_method = get_weight_prefetch_method()
-        weight_prefetch_method.maybe_prefetch_mla_or_sla_weight_in_current_stream(
-            inputs=self.o_proj.weight,
-            dependency=o_proj_input,
-            max_size=MAX_O_PROJ_PREFETCH_SIZE,
-            linear_layer=self.o_proj,
-        )
-        output[...] = self.o_proj(o_proj_input, is_prefill=prefill_preprocess_res is not None)[0]
-
-        del o_proj_input
-
-        if has_prefill:
-            maybe_save_kv_layer_to_connector(layer_name, list(kv_cache))
-        return output_padded
-
+        return prefill_preprocess_res is not None
 
     def get_num_actual_tokens(self, attn_metadata: M):
         if self.common_pcp_size > 1 and attn_metadata.num_dycp_reqs:
@@ -832,6 +865,8 @@ class AscendMlaCPImpl(AscendMLAImpl):
         prefill_metadata = attn_metadata.prefill
         assert prefill_metadata is not None
         assert prefill_metadata.chunked_context is not None
+        if isinstance(prefill_metadata.chunked_context, ChunkedContextMetadata):
+            return super().get_context_seq_len_npu(index, attn_metadata)
         assert isinstance(prefill_metadata.chunked_context, CPChunkedContextMetadata)
         assert prefill_metadata.chunked_context.padded_chunk_seq_lens_npu is not None
         iters = len(prefill_metadata.chunked_context.seq_tot)
@@ -994,7 +1029,6 @@ class AscendMlaCPImpl(AscendMLAImpl):
         assert decode_meta is not None
 
         seq_lens = decode_meta.seq_lens
-        # logger.info(f"chenxiao--debug seq_lens:{seq_lens}")
         num_tokens = q_nope.size(0)
         # shape of knope/k_pe for npu graph mode should be:
         # [num_blocks, num_kv_heads, block_size, self.kv_lora_rank/self.qk_rope_head_dim]
@@ -1047,13 +1081,13 @@ class AscendMlaCPImpl(AscendMLAImpl):
             "actual_seq_lengths_kv": seq_lens,
             "softmax_lse_flag": True,
         }
-
         forward_context: ForwardContext = get_forward_context()
         if forward_context.is_draft_model:
             graph_params = get_draft_graph_params()
         else:
             graph_params = get_graph_params()
         graph_key = (num_tokens, num_dycp_reqs) if num_dycp_reqs > 0 else num_tokens
+
         if forward_context.capturing:
             stream = torch_npu.npu.current_stream()
             event = torch.npu.ExternalEvent()
@@ -1122,8 +1156,15 @@ class AscendMlaCPImpl(AscendMLAImpl):
 
         # Update out&lse
         if self.dycp_size > 1 and num_dycp_reqs > 0:
-            dycp_attn_output = _npu_update_dycp_attn(num_dycp_reqs, attn_output, softmax_lse)
-            return self._v_up_proj(dycp_attn_output)
+            dycp_attn_output = _npu_update_dycp_attn(
+                num_dycp_reqs, attn_output, softmax_lse
+            )
+            # Only the leading DYCP requests need cross-rank merging. Keep any
+            # trailing DP requests in their original positions for sampling.
+            attn_output[:num_dycp_reqs].copy_(
+                dycp_attn_output.to(attn_output.dtype)
+            )
+            return self._v_up_proj(attn_output)
         attn_out_lse = _process_attn_out_lse(attn_output, softmax_lse)
         attn_output = _npu_attention_update(self.kv_lora_rank, attn_out_lse)
         return self._v_up_proj(attn_output)
@@ -1163,7 +1204,8 @@ class AscendMlaCPImpl(AscendMLAImpl):
             toks: the number of tokens for local gather cache.
         """
         if num_dycp_reqs == 0:
-            return super()._reorg_kvcache(kv_c_normed, k_pe, chunked_context, chunk_idx, toks, num_dycp_reqs)
+            return super()._reorg_kvcache(
+                kv_c_normed, k_pe, chunked_context, chunk_idx, toks, num_dycp_reqs)
         assert chunked_context is not None
         assert chunked_context.padded_local_chunk_seq_lens is not None
         assert chunked_context.local_context_lens_allranks is not None
@@ -1436,7 +1478,7 @@ def generate_dp_chunked_metadata(
     query_lens = torch.tensor(attn_metadata.query_lens, dtype=torch.int32)
     device = chunked_metadata.cu_seq_lens.device
 
-    num_computed_tokens_cpu = attn_metadata.seq_lens - query_lens 
+    num_computed_tokens_cpu = attn_metadata.seq_lens - query_lens
     reqs_start = attn_metadata.num_decodes  # prefill_start
 
     context_lens_cpu = num_computed_tokens_cpu[reqs_start:num_reqs]
