@@ -346,6 +346,8 @@ class AscendGatedDeltaNetAttention(GatedDeltaNetAttention):
                 max_query_len=spec_state_indices_tensor.size(-1),
                 validate_data=False,
             )
+            if tp_rank == 0:
+                logger.info(f"======== causal_conv1d_update_npu, mixed_qkv_spec: {mixed_qkv_spec}")
 
         # 1.2: Process the remaining part
         if attn_metadata.num_prefills > 0:
@@ -399,6 +401,8 @@ class AscendGatedDeltaNetAttention(GatedDeltaNetAttention):
         else:
             mixed_qkv_non_spec = None
 
+        if tp_rank == 0:
+            logger.info(f"====== conv, mixed_qkv_non_spec: {mixed_qkv_non_spec}")
         query_spec, key_spec, value_spec = self.rearrange_mixed_qkv(mixed_qkv_spec)
         query_non_spec, key_non_spec, value_non_spec = self.rearrange_mixed_qkv(mixed_qkv_non_spec)
 
@@ -450,6 +454,8 @@ class AscendGatedDeltaNetAttention(GatedDeltaNetAttention):
         if attn_metadata.num_prefills > 0:
             initial_state = ssm_state[non_spec_state_indices_tensor].transpose(-1, -2).contiguous()
             clear_ssm_states(initial_state, has_initial_state)
+            if tp_rank == 0:
+                logger.info(f"========= chunk_gated_delta_rule, query_non_spec: {query_non_spec}, key_non_spec: {key_non_spec}, value_non_spec: {value_non_spec}, g_non_spec: {g_non_spec}")
             (core_attn_out_non_spec, last_recurrent_state) = chunk_gated_delta_rule(
                 q=query_non_spec,
                 k=key_non_spec,
@@ -466,6 +472,8 @@ class AscendGatedDeltaNetAttention(GatedDeltaNetAttention):
             ssm_state[non_spec_state_indices_tensor] = (
                 last_recurrent_state.transpose(-1, -2).contiguous().to(ssm_state.dtype)
             )
+            if tp_rank == 0:
+                logger.info(f"======= after chunk_gated_delta_rule, core_attn_out_non_spec: {core_attn_out_non_spec}, last_recurrent_state: {last_recurrent_state}")
         elif attn_metadata.num_decodes > 0:
             cu_seqlens = non_spec_query_start_loc[: attn_metadata.num_decodes + 1]
             actual_seq_lengths = torch.cat([cu_seqlens[:1], cu_seqlens[1:] - cu_seqlens[:-1]])
