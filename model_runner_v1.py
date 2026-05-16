@@ -1070,3 +1070,738 @@ class NPUModelRunner(GPUModelRunner):
             spec_decode_metadata,
             total_num_scheduled_tokens,
         )
+
+    def _preprocess(
+        self,
+        scheduler_output: "SchedulerOutput",
+        num_input_tokens: int,
+        intermediate_tensors: IntermediateTensors | None = None,
+    ) -> tuple[
+        torch.Tensor | None,
+        torch.Tensor | None,
+        torch.Tensor,
+        IntermediateTensors | None,
+        dict[str, Any],
+        ECConnectorOutput | None,
+    ]:
+        restore_state = None
+
+        # For PCP, local worker token count can differ from scheduler global count.
+        # Multimodal preprocessing must use local scheduled token count.
+        if (
+            self.pcp_size > 1
+            and self.supports_mm_inputs
+            and get_pp_group().is_first_rank
+            and not self.model_config.is_encoder_decoder
+        ):
+            positions_np = (
+                self.positions.np
+                if hasattr(self.positions, "np")
+                else self._positions_np_buf
+            )
+            local_num_sched, local_total = self.pcp_manager.get_local_schedule_layout()
+            restore_state = self.pcp_manager.maybe_localize_scheduler_output_for_mm_preprocess(
+                scheduler_output=scheduler_output,
+                req_ids=self.input_batch.req_ids,
+                requests=self.requests,
+                positions_np=positions_np,
+                local_num_scheduled_tokens=local_num_sched,
+                local_total_num_scheduled_tokens=local_total,
+                encoder_cache=self.encoder_cache,
+            )
+
+        try:
+            return super()._preprocess(
+                scheduler_output, num_input_tokens, intermediate_tensors
+            )
+        finally:
+            if (
+                self.pcp_size > 1
+                and self.supports_mm_inputs
+                and get_pp_group().is_first_rank
+                and not self.model_config.is_encoder_decoder
+            ):
+                self.pcp_manager.restore_scheduler_output_after_mm_preprocess(
+                    scheduler_output, restore_state
+                )
+
+    def _gather_mm_embeddings(
+        self,
+        scheduler_output: "SchedulerOutput",
+        shift_computed_tokens: int = 0,
+    ) -> tuple[list[torch.Tensor], torch.Tensor]:
+        if self.pcp_size <= 1:
+            return super()._gather_mm_embeddings(scheduler_output, shift_computed_tokens)
+
+        local_num_scheduled_tokens, _ = self.pcp_manager.get_local_schedule_layout()
+        if local_num_scheduled_tokens is None:
+            return super()._gather_mm_embeddings(scheduler_output, shift_computed_tokens)
+
+        total_num_scheduled_tokens = int(np.sum(local_num_scheduled_tokens))
+        positions_np = self.positions.np if hasattr(self.positions, "np") else self._positions_np_buf
+        mm_embeds = list[torch.Tensor]()
+        is_mm_embed = torch.zeros(
+            total_num_scheduled_tokens, dtype=torch.bool, device="cpu"
+        )
+
+        (
+            mm_embeds,
+            should_sync_mrope_positions,
+            should_sync_xdrope_positions,
+        ) = self.pcp_manager.gather_mm_embeddings_for_pcp(
+            req_ids=self.input_batch.req_ids,
+            requests=self.requests,
+            positions_np=positions_np,
+            local_num_scheduled_tokens=local_num_scheduled_tokens,
+            shift_computed_tokens=shift_computed_tokens,
+            encoder_cache=self.encoder_cache,
+            is_mm_embed=is_mm_embed,
+            model=self.model,
+            is_multimodal_pruning_enabled=self.is_multimodal_pruning_enabled,
+            uses_mrope=self.uses_mrope,
+            warning_once=logger.warning_once,
+        )
+
+        if should_sync_mrope_positions:
+            self._calc_mrope_positions(scheduler_output)
+            self.mrope_positions.copy_to_gpu(total_num_scheduled_tokens)
+
+        if should_sync_xdrope_positions:
+            self._calc_xdrope_positions(scheduler_output)
+            self.xdrope_positions.copy_to_gpu(total_num_scheduled_tokens)
+
+        return mm_embeds, is_mm_embed
+
+    def _build_attn_state(self, num_reqs, num_scheduled_tokens, num_valid_tokens):
+        if np.all(self.input_batch.num_computed_tokens_cpu[:num_reqs] == 0):
+            attn_state = AscendAttentionState.PrefillNoCache
+        # We assume it is the decode stage, where prefill occurs but only one token is not hit in cache.
+        elif np.all(num_scheduled_tokens == 1):
+            attn_state = AscendAttentionState.DecodeOnly
+            if self.speculative_config and self.speculative_config.method == "mtp":
+                # SpecDecoding now supports seq_len=1 and seq_len=2
+                # In Prefilling Decoding Disaggregation scenario, SpecDecoding need to supports seq_len=1
+                attn_state = AscendAttentionState.SpecDecoding
+        # Speculative decoding.
+        elif np.all(num_valid_tokens == 1):
+            if self.speculative_config:
+                attn_state = AscendAttentionState.SpecDecoding
+            else:
+                attn_state = AscendAttentionState.ChunkedPrefill
+        # splitfuse
+        elif self.scheduler_config.enable_chunked_prefill:
+            attn_state = AscendAttentionState.ChunkedPrefill
+        else:
+            attn_state = AscendAttentionState.PrefillCacheHit
+
+        # For the overlay of the PCP feature and the eagle3, attn_state needs to be recovered
+        # TODO: Resolved the conflict between the sunset of attn_state and the PCP that requires this interface.
+        if attn_state == AscendAttentionState.SpecDecoding and self.speculative_config.method != "mtp":
+            self.attn_state = AscendAttentionState.ChunkedPrefill  # type: ignore
+        else:
+            self.attn_state = attn_state  # type: ignore
+
+        return attn_state
+
+    def _calc_spec_decode_metadata(
+        self,
+        num_draft_tokens: np.ndarray,
+        cu_num_scheduled_tokens: np.ndarray,
+        num_pcp_pads: np.ndarray | None,
+    ) -> SpecDecodeMetadata:
+        # Inputs:
+        # cu_num_scheduled_tokens:  [  4, 104, 107, 207, 209]
+        # num_draft_tokens:         [  3,   0,   2,   0,   1]
+        # Outputs:
+        # cu_num_draft_tokens:      [  3,   3,   5,   5,   6]
+        # logits_indices:           [  0,   1,   2,   3, 103, 104, 105, 106,
+        #                            206, 207, 208]
+        # target_logits_indices:    [  0,   1,   2,   5,   6,   9]
+        # bonus_logits_indices:     [  3,   4,   7,   8,  10]
+
+        # Compute the logits indices.
+        # [4, 1, 3, 1, 2]
+        num_sampled_tokens = num_draft_tokens + 1
+        # Step 1.
+        # cu_num_sampled_tokens: [4, 5, 8, 9, 11]
+        # _arange_scratch[:11]: [0, 1, 2, 3, 0, 0, 1, 2, 0, 0, 1]
+        cu_num_sampled_tokens = self._get_cumsum_and_arange(
+            num_sampled_tokens, self._arange_scratch, cumsum_dtype=np.int32
+        )
+        # Step 2. [0, 0, 0, 0, 103, 104, 104, 104, 206, 207, 207]
+        logits_indices = np.repeat(cu_num_scheduled_tokens - num_sampled_tokens, num_sampled_tokens)
+        # Step 3. [0, 1, 2, 3, 103, 104, 105, 106, 206, 207, 208]
+        logits_indices += self._arange_scratch[: cu_num_sampled_tokens[-1]]
+
+        # while pcp > 1, decode results may contain padding (from pcp all-gather),
+        # update logits_indices after getting draft_token_ids from ori logits_indices
+        if self.pcp_size > 1:
+            cu_num_scheduled_tokens = cu_num_scheduled_tokens * self.pcp_size - num_pcp_pads
+            logits_indices_pcp = np.repeat(cu_num_scheduled_tokens - num_sampled_tokens, num_sampled_tokens)
+            logits_indices_pcp += self._arange_scratch[: cu_num_sampled_tokens[-1]]
+            logits_indices_pcp = torch.from_numpy(logits_indices_pcp).pin_memory().to(self.device, non_blocking=True)
+
+        # Compute the bonus logits indices.
+        bonus_logits_indices = cu_num_sampled_tokens - 1
+
+        # Compute the draft logits indices.
+        # [3, 3, 5, 5, 6]
+        cu_num_draft_tokens = np.cumsum(num_draft_tokens, dtype=np.int32)
+        total_num_draft_tokens = cu_num_draft_tokens[-1]
+        # [0, 0, 0, 3, 3, 5]
+        cumsums_offsets = np.repeat(cu_num_draft_tokens - num_draft_tokens, num_draft_tokens)
+        # [0, 1, 2, 0, 1, 0]
+        arange = self.arange_np[:total_num_draft_tokens] - cumsums_offsets
+        # [0, 0, 0, 5, 5, 9]
+        target_logits_indices = np.repeat(cu_num_sampled_tokens - num_sampled_tokens, num_draft_tokens)
+        # [0, 1, 2, 5, 6, 9]
+        target_logits_indices += arange
+
+        # TODO: Optimize the CPU -> NPU copy.
+        cu_num_draft_tokens = torch.from_numpy(cu_num_draft_tokens).pin_memory().to(self.device, non_blocking=True)
+        cu_num_sampled_tokens = torch.from_numpy(cu_num_sampled_tokens).pin_memory().to(self.device, non_blocking=True)
+        logits_indices = torch.from_numpy(logits_indices).pin_memory().to(self.device, non_blocking=True)
+        target_logits_indices = torch.from_numpy(target_logits_indices).pin_memory().to(self.device, non_blocking=True)
+        bonus_logits_indices = torch.from_numpy(bonus_logits_indices).pin_memory().to(self.device, non_blocking=True)
+
+        # Compute the draft token ids.
+        # draft_token_indices:      [  1,   2,   3, 105, 106, 208]
+        draft_token_ids = self.input_ids.gpu[logits_indices]
+        draft_token_ids = draft_token_ids[target_logits_indices + 1]
+        if self.pcp_size > 1:
+            logits_indices = logits_indices_pcp
+        return SpecDecodeMetadata(
+            draft_token_ids=draft_token_ids,
+            num_draft_tokens=num_draft_tokens.tolist(),
+            cu_num_draft_tokens=cu_num_draft_tokens,
+            cu_num_sampled_tokens=cu_num_sampled_tokens,
+            target_logits_indices=target_logits_indices,
+            bonus_logits_indices=bonus_logits_indices,
+            logits_indices=logits_indices,
+        )
+
+    def _copy_valid_sampled_token_count(
+        self, next_token_ids: torch.Tensor, valid_sampled_tokens_count: torch.Tensor
+    ) -> None:
+        if self.valid_sampled_token_count_event is None:
+            return
+
+        # Initialize a new stream to overlap the copy operation with
+        # prepare_input of draft model.
+        with torch.npu.stream(self.valid_sampled_token_count_copy_stream):  
+            self.valid_sampled_token_count_copy_stream.wait_stream(torch.npu.current_stream())  
+            counts = valid_sampled_tokens_count
+            counts_cpu = self.valid_sampled_token_count_cpu
+            assert counts_cpu is not None
+            counts_cpu[: counts.shape[0]].copy_(counts, non_blocking=True)
+            self.valid_sampled_token_count_event.record()
+
+        if self.use_async_spec_decode:
+            # Stash for GPU-side correction in _prepare_inputs.
+            self.valid_sampled_token_count_gpu = valid_sampled_tokens_count # type: ignore[no-redef]
+        self.input_batch.prev_sampled_token_ids = next_token_ids.unsqueeze(1)
+
+    # TODO: Once the PCP features are complete, it will fully inherit the classes from the VLLM community.
+    def propose_draft_token_ids(
+        self,
+        valid_sampled_token_ids: torch.Tensor | list[list[int]],
+        sampling_metadata: SamplingMetadata,
+        scheduler_output: "SchedulerOutput",
+        spec_decode_metadata: SpecDecodeMetadata,
+        spec_decode_common_attn_metadata: AscendCommonAttentionMetadata,
+        positions: torch.Tensor,
+        num_scheduled_tokens: int,
+        hidden_states: torch.Tensor,
+        aux_hidden_states: torch.Tensor = None,
+        sample_hidden_states: torch.Tensor = None,
+        target_model_batch_desc: BatchDescriptor = None,
+    ) -> list[list[int]] | None:
+        if not self.drafter:
+            # Speculative decoding is not enabled.
+            draft_token_ids = None
+        elif isinstance(self.drafter, (AscendNgramProposer, AscendSuffixDecodingProposer)):
+            draft_token_ids = self.drafter.propose(valid_sampled_token_ids)
+        elif isinstance(self.drafter, AscendMedusaProposer):
+            draft_token_ids = self.drafter.propose(
+                valid_sampled_token_ids, sampling_metadata, spec_decode_metadata, sample_hidden_states
+            )
+        elif self.speculative_config.use_eagle() or self.speculative_config.uses_draft_model():
+            common_attn_metadata = spec_decode_common_attn_metadata
+            sampled_token_ids = valid_sampled_token_ids
+
+            if self.vllm_config.speculative_config.disable_padded_drafter_batch:
+                # When padded-batch is disabled, the sampled_token_ids should be
+                # the cpu-side list[list[int]] of valid sampled tokens for each
+                # request, with invalid requests having empty lists.
+                assert isinstance(sampled_token_ids, list), (
+                    "sampled_token_ids should be a python list whenpadded-batch is disabled."
+                )
+                assert self.drafter is not None
+                next_token_ids = self.drafter.prepare_next_token_ids_cpu(
+                    sampled_token_ids, self.requests, self.input_batch, scheduler_output.num_scheduled_tokens
+                )
+            else:
+                # When using padded-batch, the sampled_token_ids should be
+                # the gpu tensor of sampled tokens for each request, of shape
+                # (num_reqs, num_spec_tokens + 1) with rejected tokens having
+                # value -1.
+                assert isinstance(sampled_token_ids, torch.Tensor), (
+                    "sampled_token_ids should be a torch.Tensor whenpadded-batch is enabled."
+                )
+                assert self.drafter is not None
+                next_token_ids, valid_sampled_tokens_count = self.drafter.prepare_next_token_ids_padded(
+                    sampled_token_ids,
+                    self.requests,
+                    self.input_batch,
+                    self.discard_request_indices.gpu,
+                    self.num_discarded_requests,
+                )
+                self._copy_valid_sampled_token_count(next_token_ids, valid_sampled_tokens_count)
+
+            req_scheduled_tokens = scheduler_output.num_scheduled_tokens
+            if self.use_cp:
+                long_seq_metadata = self.long_seq_metadata  # type: ignore
+                input_ids_pcp_full = self.pcp_manager.input_ids_pcp_full.gpu
+                query_start_loc_pcp_full = self.pcp_manager.query_start_loc_pcp_full.gpu
+                query_start_loc_pcp_full_cpu = self.pcp_manager.query_start_loc_pcp_full.cpu
+                num_reqs = self.input_batch.num_reqs
+                num_prefill_reqs = self.pcp_manager.num_prefill_reqs
+                num_decode_reqs = self.pcp_manager.num_decode_reqs
+            else:
+                long_seq_metadata = None  # type: ignore
+                num_prefill_reqs = 0
+                num_decode_reqs = 0
+
+            num_rejected_tokens_gpu = None
+            if spec_decode_metadata is None:
+                # update pcp related params
+                if self.pcp_size > 1:
+                    token_indices_to_sample = query_start_loc_pcp_full[1 : num_reqs + 1] - 1
+                    target_token_ids = input_ids_pcp_full[:num_scheduled_tokens]
+                    target_positions = self._get_positions(num_scheduled_tokens)
+                    target_hidden_states = hidden_states
+                    if self.use_aux_hidden_state_outputs:
+                        target_hidden_states = torch.cat([h for h in aux_hidden_states], dim=-1)
+                else:
+                    token_indices_to_sample = None
+                    # input_ids can be None for multimodal models.
+                    target_token_ids = self.input_ids.gpu[:num_scheduled_tokens]
+                    target_positions = self._get_positions(num_scheduled_tokens)
+                    if self.use_aux_hidden_state_outputs:
+                        target_hidden_states = torch.cat([h[:num_scheduled_tokens] for h in aux_hidden_states], dim=-1)
+                    else:
+                        target_hidden_states = hidden_states[:num_scheduled_tokens]
+            else:
+                if self.pcp_size > 1:
+                    assert common_attn_metadata is not None
+                    common_attn_metadata.query_start_loc_cpu[: num_reqs + 1] = query_start_loc_pcp_full_cpu[
+                        : num_reqs + 1
+                    ]
+                    assert common_attn_metadata is not None
+                    common_attn_metadata.query_start_loc[: num_reqs + 1] = query_start_loc_pcp_full[: num_reqs + 1]
+                if self.vllm_config.speculative_config.disable_padded_drafter_batch:
+                    # NOTE: Currently, MTP-fullgraph is incompatibility with pcp
+                    token_indices_to_sample = None
+                    assert self.drafter is not None
+                    common_attn_metadata, token_indices = self.drafter.prepare_inputs(
+                        common_attn_metadata, sampled_token_ids, spec_decode_metadata.num_draft_tokens
+                    )
+                else:
+                    assert self.drafter is not None
+                    common_attn_metadata, token_indices, token_indices_to_sample, num_rejected_tokens_gpu = (
+                        self.drafter.prepare_inputs_padded(
+                            common_attn_metadata, spec_decode_metadata, valid_sampled_tokens_count
+                        )
+                    )
+                if self.pcp_size > 1:
+                    target_token_ids = input_ids_pcp_full[token_indices]
+                    target_positions = positions
+                    target_hidden_states = hidden_states
+                    if self.use_aux_hidden_state_outputs:
+                        target_hidden_states = torch.cat([h for h in aux_hidden_states], dim=-1)
+                else:
+                    target_token_ids = self.input_ids.gpu[token_indices]
+                    target_positions = self._get_positions(token_indices)
+                    if self.use_aux_hidden_state_outputs:
+                        target_hidden_states = torch.cat([h[token_indices] for h in aux_hidden_states], dim=-1)
+                    else:
+                        target_hidden_states = hidden_states[token_indices]
+            assert self.drafter is not None
+            draft_token_ids = self.drafter._propose(
+                target_token_ids=target_token_ids,
+                target_positions=target_positions,
+                target_hidden_states=target_hidden_states,
+                next_token_ids=next_token_ids,
+                token_indices_to_sample=token_indices_to_sample,
+                common_attn_metadata=common_attn_metadata,
+                target_model_batch_desc=target_model_batch_desc,
+                sampling_metadata=sampling_metadata,
+                req_scheduled_tokens=req_scheduled_tokens,
+                long_seq_metadata=long_seq_metadata,
+                num_prefill_reqs=num_prefill_reqs,
+                num_decode_reqs=num_decode_reqs,
+                scheduler_output=scheduler_output,
+                num_scheduled_tokens=num_scheduled_tokens,
+                num_rejected_tokens_gpu=num_rejected_tokens_gpu,
+            )
+        else:
+            raise ValueError(f"Unknown speculative decoding method: {self.speculative_config.method}")
+
+        return draft_token_ids
+
+    @torch.inference_mode()
+    def execute_model(
+        self,
+        scheduler_output: "SchedulerOutput",
+        intermediate_tensors: IntermediateTensors | None = None,
+    ) -> ModelRunnerOutput | IntermediateTensors | None:
+        if self.vllm_config.model_config.enable_return_routed_experts:
+            capturer = RoutedExpertsCapturer.get_instance()
+            if capturer is not None:
+                capturer.clear_buffer()
+            else:
+                logger.warning("RoutedExpertsCapturer is not initialized.")
+
+        if self.ascend_config.profiling_chunk_config.enabled:
+            self._sync_device()
+            self._execution_start_time = time.perf_counter()
+        if self.execute_model_state is not None:
+            raise RuntimeError("State error: sample_tokens() must be called after execute_model() returns None.")
+        # self._draft_token_ids is None when `input_fits_in_drafter=False`
+        # and there is no draft tokens scheduled. so it need to update the
+        # spec_decoding info in scheduler_output with async_scheduling.
+        # use deepcopy to avoid the modification has influence on the
+        # scheduler_output in engine core process.
+        # TODO(Ronald1995): deepcopy is expensive when there is a large
+        # number of requests, optimize it later.
+        if ((
+            self.use_async_scheduling and self.num_spec_tokens and self._draft_token_ids is None  # type: ignore[has-type]
+        ) or (
+            # NOTE: This branch specifically triggers a deepcopy during the prefill phase 
+            # only for PCP (Parallel Context Processing) + Multi-Modal (MM) scenarios. 
+            # It does not affect other use cases. This is a temporary workaround and 
+            # will be removed once upstream vLLM provides native support for PCP + MM.
+            self.pcp_size > 1 and self.supports_mm_inputs and get_pp_group().is_first_rank
+            and not self.model_config.is_encoder_decoder
+        )):
+            scheduler_output = deepcopy(scheduler_output)
+        num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+        with record_function_or_nullcontext("prepare input"):
+            with self.synchronize_input_prep():
+                # Update persistent batch states.
+                deferred_state_corrections_fn = self._update_states(scheduler_output)
+
+                if has_ec_transfer() and get_ec_transfer().is_producer:
+                    with self.maybe_get_ec_connector_output(
+                        scheduler_output,
+                        encoder_cache=self.encoder_cache,
+                    ) as ec_connector_output:
+                        self._execute_mm_encoder(scheduler_output)
+                        return make_empty_encoder_model_runner_output(scheduler_output)
+
+                if not num_scheduled_tokens:
+                    if (
+                        self.parallel_config.distributed_executor_backend == "external_launcher"
+                        and self.parallel_config.data_parallel_size > 1
+                    ):
+                        # this is a corner case when both external launcher
+                        # and DP are enabled, num_scheduled_tokens could be
+                        # 0, and has_unfinished_requests in the outer loop
+                        # returns True. before returning early here we call
+                        # dummy run to ensure coordinate_batch_across_dp
+                        # is called into to avoid out of sync issues.
+                        self._dummy_run(1)
+                    if not has_kv_transfer_group():
+                        # Return empty ModelRunnerOutput if no work to do.
+                        return EMPTY_MODEL_RUNNER_OUTPUT
+                    return self.kv_connector_no_forward(scheduler_output, self.vllm_config)
+                if self.cache_config.kv_sharing_fast_prefill:
+                    assert not self.num_prompt_logprobs, (
+                        "--kv-sharing-fast-prefill produces incorrect "
+                        "logprobs for prompt tokens, tokens, please disable "
+                        "it when the requests need prompt logprobs"
+                    )
+
+                num_reqs = self.input_batch.num_reqs
+                req_ids = self.input_batch.req_ids
+                tokens = [scheduler_output.num_scheduled_tokens[i] for i in req_ids]
+                num_scheduled_tokens_np = np.array(tokens, dtype=np.int32)
+                max_num_scheduled_tokens = int(num_scheduled_tokens_np.max())
+
+                (
+                    logits_indices,
+                    spec_decode_metadata,
+                    total_num_scheduled_tokens,
+                ) = self._prepare_inputs(
+                    scheduler_output,
+                    num_scheduled_tokens_np,
+                )
+
+                num_tokens_unpadded = scheduler_output.total_num_scheduled_tokens
+                if self.pcp_size > 1:
+                    num_tokens_unpadded = self.pcp_manager.total_num_sampled_tokens_pcp
+                cascade_attn_prefix_lens = None
+                # Disable cascade attention when using microbatching (DBO)
+                if self.cascade_attn_enabled and not self.parallel_config.enable_dbo:
+                    # Pre-compute cascade attention prefix lengths
+                    cascade_attn_prefix_lens = self._compute_cascade_attn_prefix_lens(
+                        num_scheduled_tokens_np,
+                        self.input_batch.num_computed_tokens_cpu[:num_reqs],
+                        scheduler_output.num_common_prefix_blocks,
+                    )
+
+                (
+                    cudagraph_mode,
+                    batch_desc,
+                    should_ubatch,
+                    num_tokens_across_dp,
+                    cudagraph_stats,
+                ) = self._determine_batch_execution_and_padding(
+                    num_tokens=num_tokens_unpadded,
+                    num_reqs=num_reqs,
+                    num_scheduled_tokens_np=num_scheduled_tokens_np,
+                    max_num_scheduled_tokens=max_num_scheduled_tokens,
+                    use_cascade_attn=cascade_attn_prefix_lens is not None,
+                    force_eager=self.model_config.enforce_eager,
+                    num_encoder_reqs=len(scheduler_output.scheduled_encoder_inputs),
+                )
+
+                logger.debug(
+                    "Running batch with cudagraph_mode: %s, batch_descriptor: %s, "
+                    "should_ubatch: %s, num_tokens_across_dp: %s",
+                    cudagraph_mode,
+                    batch_desc,
+                    should_ubatch,
+                    num_tokens_across_dp,
+                )
+
+                num_tokens_padded = batch_desc.num_tokens
+                num_reqs_padded = batch_desc.num_reqs if batch_desc.num_reqs is not None else num_reqs
+                ubatch_slices, ubatch_slices_padded = maybe_create_ubatch_slices(
+                    should_ubatch,
+                    num_scheduled_tokens_np,
+                    num_tokens_padded,
+                    num_reqs_padded,
+                    self.parallel_config.num_ubatches,
+                )
+
+                pad_attn = cudagraph_mode == CUDAGraphMode.FULL
+
+                # NOTE(Angazenn): According to https://github.com/vllm-project/vllm/pull/30877,
+                # there should be a corresponding 'postprocess_mamba'. However, it is called inside
+                # '_update_states_after_model_execute', which is not overridden in vLLM-Ascend.
+                # We simply utilize the implementation in vLLM.
+                if self.cache_config.mamba_cache_mode == "align":
+                    # preprocess_mamba reads req_state.num_computed_tokens (CPU)
+                    # to decide copy operations, so we must apply deferred
+                    # corrections before it runs.
+                    if deferred_state_corrections_fn:
+                        deferred_state_corrections_fn()
+                        deferred_state_corrections_fn = None
+                    mamba_utils.preprocess_mamba(
+                        scheduler_output,
+                        self.kv_cache_config,
+                        self.cache_config,
+                        self.mamba_state_idx,
+                        self.input_batch,
+                        self.requests,
+                        self.compilation_config.static_forward_context,
+                        self.model.get_mamba_state_copy_func(),
+                        self._get_mamba_copy_bufs(),
+                    )
+                    # preprocess_mamba resets num_accepted_tokens_cpu to 1
+                    # for requests whose state was copied to a new block.
+                    # Re-sync to GPU so the mamba kernel reads from the
+                    # correct initial state slot (init_token_idx = 0).
+                    self.num_accepted_tokens.np[:num_reqs] = (
+                        self.input_batch.num_accepted_tokens_cpu[:num_reqs]
+                    )
+                    self.num_accepted_tokens.copy_to_gpu(num_reqs)
+
+                use_spec_decode = len(scheduler_output.scheduled_spec_decode_tokens) > 0
+                ubatch_slices_attn = ubatch_slices_padded if pad_attn else ubatch_slices
+
+                if (
+                    cudagraph_mode == CUDAGraphMode.FULL
+                    or (enable_sp() and not self.model_config.use_mla)
+                    and self.pcp_size * self.dcp_size == 1
+                ):
+                    # Currently, Graph Mode and SP will both pad num_tokens,
+                    # Another possible condition is num_tokens_padded != num_tokens_unpadded
+                    # but this scope is way too big and the consequences are unpredictable
+                    num_reqs_padded = self._pad_query_start_loc_for_fia(
+                        num_tokens_padded, num_reqs_padded, num_reqs, cudagraph_mode, batch_desc.num_reqs
+                    )
+
+                (attn_metadata, spec_decode_common_attn_metadata) = self._build_attention_metadata(
+                    num_tokens=num_tokens_unpadded
+                    if not (self.use_cp and self.pcp_manager.pcp_use_hybrid_attn)
+                    else total_num_scheduled_tokens,
+                    num_tokens_padded=num_tokens_padded,
+                    num_reqs=num_reqs,
+                    num_reqs_padded=num_reqs_padded,
+                    max_query_len=max_num_scheduled_tokens,
+                    ubatch_slices=ubatch_slices_attn,
+                    logits_indices=logits_indices,
+                    use_spec_decode=use_spec_decode,
+                    num_scheduled_tokens=scheduler_output.num_scheduled_tokens,
+                    num_scheduled_tokens_np=num_scheduled_tokens_np,
+                    cascade_attn_prefix_lens=cascade_attn_prefix_lens,
+                )
+
+            (
+                input_ids,
+                inputs_embeds,
+                positions,
+                intermediate_tensors,
+                model_kwargs,
+                ec_connector_output,
+            ) = self._preprocess(
+                scheduler_output,
+                num_tokens_padded
+                if not (self.use_cp and self.pcp_manager.pcp_use_hybrid_attn)
+                else total_num_scheduled_tokens,
+                intermediate_tensors,
+            )
+
+            # update global cos, sin
+            update_cos_sin(positions)
+
+        if self.dynamic_eplb:
+            with record_function_or_nullcontext("EPLB weight D2D"):
+                self.eplb_updator.forward_before()
+
+        # Set cudagraph mode to none if calc_kv_scales is true.
+        # KV scales calculation involves dynamic operations that are incompatible
+        # with CUDA graph capture.
+        if self.calculate_kv_scales:  # type: ignore[has-type]
+            cudagraph_mode = CUDAGraphMode.NONE
+            # Mark KV scales as calculated after the first forward pass
+            self.calculate_kv_scales = False  # type: ignore[has-type]
+        # prevent debugger is None
+        if self.debugger is not None:
+            dbg_cfg = getattr(self.debugger, "config", None)
+            dump_level = str(getattr(dbg_cfg, "level", "L1")).upper() if dbg_cfg is not None else "L1"
+            if dump_level in ("L0", "MIX"):
+                self.debugger.start(model=self.model)
+            else:
+                self.debugger.start()
+        if self.ascend_config.enable_async_exponential:
+            self.sampler.do_async_exponential(
+                b_s=logits_indices.shape[0],
+                head_dim=self.model_config.get_vocab_size(),
+                generators=self.input_batch.sampling_metadata.generators,
+            )
+
+        # Encoder-decoder models can only compile the pure decode steps where no
+        # encoder inputs are present. Use eager for the first pass.
+        num_encoder_reqs = len(scheduler_output.scheduled_encoder_inputs)
+        has_encoder_input = self.model_config.is_encoder_decoder and num_encoder_reqs > 0
+
+        # Run forward pass
+        clear_kv_metadata = self.speculative_config is None
+        with (
+            record_function_or_nullcontext("forward"),
+            set_ascend_forward_context(
+                attn_metadata,
+                self.vllm_config,
+                num_tokens=num_tokens_padded,
+                num_tokens_across_dp=num_tokens_across_dp,
+                aclgraph_runtime_mode=cudagraph_mode,
+                batch_descriptor=batch_desc,
+                num_actual_tokens=scheduler_output.total_num_scheduled_tokens,
+                model_instance=self.model,
+                max_tokens_across_pcp=0 if self.pcp_size == 1 else self.pcp_manager.max_num_tokens_across_pcp,
+                skip_compiled=has_encoder_input,
+            ),
+            self.maybe_get_kv_connector_output(
+                scheduler_output,
+                **(
+                    {"defer_finalize": not clear_kv_metadata}
+                ),
+            ) as kv_connector_output,
+        ):
+            hidden_states = self._model_forward(
+                num_tokens_padded, input_ids, positions, intermediate_tensors, inputs_embeds, **model_kwargs
+            )
+        with record_function_or_nullcontext("post process"):
+            aux_hidden_states = None
+            if self.use_aux_hidden_state_outputs:
+                hidden_states, aux_hidden_states = hidden_states
+            if self.pcp_size > 1:
+                # NOTE we must `slice` hidden_states because pcp_allgather_restore_idx
+                # ignores the padding from CUDA Graph.
+                hidden_states = self.pcp_manager.get_restore_hidden_states(hidden_states)
+                if aux_hidden_states is not None:
+                    aux_hidden_states = [
+                        self.pcp_manager.get_restore_hidden_states(aux_hidden_states_pcp)
+                        for aux_hidden_states_pcp in aux_hidden_states
+                    ]
+
+            if not self.broadcast_pp_output:
+                # Common case.
+                if not get_pp_group().is_last_rank:
+                    # Return the intermediate tensors.
+                    assert isinstance(hidden_states, IntermediateTensors)
+                    hidden_states.kv_connector_output = kv_connector_output
+                    self.kv_connector_output = kv_connector_output
+                    if self.debugger is not None:
+                        self.debugger.stop()
+                        self.debugger.step()
+                    return hidden_states
+                if self.is_pooling_model:
+                    # Return the pooling output.
+                    output = self._pool(
+                        hidden_states, num_scheduled_tokens, num_scheduled_tokens_np, kv_connector_output
+                    )
+                    output.kv_connector_output = kv_connector_output
+                    if self.debugger is not None:
+                        self.debugger.stop()
+                        self.debugger.step()
+                    return output
+
+                sample_hidden_states = hidden_states[logits_indices]
+                logits = self.model.compute_logits(sample_hidden_states)
+            else:
+                # Rare case.
+                assert not self.is_pooling_model
+
+                if not get_pp_group().is_last_rank:
+                    sample_hidden_states = hidden_states[logits_indices]
+                    get_pp_group().send_tensor_dict(hidden_states.tensors, all_gather_group=get_tp_group())
+                    logits = None
+                else:
+                    sample_hidden_states = hidden_states[logits_indices]
+                    logits = self.model.compute_logits(sample_hidden_states)
+
+                model_output_broadcast_data: dict[str, Any] = {}
+                if logits is not None:
+                    model_output_broadcast_data["logits"] = logits.contiguous()
+                broadcasted = get_pp_group().broadcast_tensor_dict(
+                    model_output_broadcast_data, src=len(get_pp_group().ranks) - 1
+                )
+                assert broadcasted is not None
+                logits = broadcasted["logits"]
+
+            # Apply structured output bitmasks if present
+            self.execute_model_state = ExecuteModelState(
+                scheduler_output,
+                logits,
+                spec_decode_metadata,
+                spec_decode_common_attn_metadata,
+                hidden_states,
+                sample_hidden_states,
+                aux_hidden_states,
+                attn_metadata,
+                positions,
+                ec_connector_output,
+                cudagraph_stats,
+                batch_desc,
+            )
+            self.kv_connector_output = kv_connector_output
+
+        # Now the batch has been launched we can wait for corrections from the
+        # previous model forward without breaking async scheduling.
+        if deferred_state_corrections_fn:
+            deferred_state_corrections_fn()
+        return None
