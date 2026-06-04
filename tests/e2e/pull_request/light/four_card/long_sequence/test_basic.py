@@ -512,12 +512,31 @@ def test_qwen3_5_4b_multimodal_single_and_multi_image():
         dtype="bfloat16",
         max_model_len=4096,
         tensor_parallel_size=1,
-        prefill_context_parallel_size=4,
+        prefill_context_parallel_size=2,
         decode_context_parallel_size=1,
         max_num_batched_tokens=1024,
         gpu_memory_utilization=0.8,
         limit_mm_per_prompt={"image": 2},
         block_size=128,
+    ) as runner:
+        outputs = runner.model.generate(inputs, sampling_params=sampling_params)
+        assert len(outputs) == len(inputs)
+        for output in outputs:
+            assert output.outputs and output.outputs[0].text.strip()
+
+    with VllmRunner(
+        model,
+        enforce_eager=True,
+        dtype="bfloat16",
+        max_model_len=4096,
+        tensor_parallel_size=1,
+        prefill_context_parallel_size=2,
+        decode_context_parallel_size=1,
+        max_num_batched_tokens=1024,
+        gpu_memory_utilization=0.8,
+        limit_mm_per_prompt={"image": 2},
+        block_size=128,
+        enable_prefix_caching=True,
     ) as runner:
         outputs = runner.model.generate(inputs, sampling_params=sampling_params)
         assert len(outputs) == len(inputs)
