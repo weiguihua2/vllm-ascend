@@ -1,0 +1,179 @@
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:37 [model_runner_v1.py:792] === num_scheduled_tokens: [9]
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:37 [model_runner_v1.py:792] === num_scheduled_tokens: [9]
+(Worker_PCP0_TP0 pid=127711) /usr/local/python3.11.10/lib/python3.11/site-packages/torch/_dynamo/eval_frame.py:1181: UserWarning: chunk_gated_delta_rule: Input tensor shape suggests potential format mismatch: seq_len (5) < num_heads (8). This may indicate the inputs were passed in head-first format [B, H, T, ...] when head_first=False was specified. Please verify your input tensor format matches the expected shape [B, T, H, ...].
+(Worker_PCP0_TP0 pid=127711)   return fn(*args, **kwargs)
+(Worker_PCP0_TP1 pid=127739) /usr/local/python3.11.10/lib/python3.11/site-packages/torch/_dynamo/eval_frame.py:1181: UserWarning: chunk_gated_delta_rule: Input tensor shape suggests potential format mismatch: seq_len (5) < num_heads (8). This may indicate the inputs were passed in head-first format [B, H, T, ...] when head_first=False was specified. Please verify your input tensor format matches the expected shape [B, T, H, ...].
+(Worker_PCP0_TP1 pid=127739)   return fn(*args, **kwargs)
+(Worker_PCP1_TP0 pid=127800) /usr/local/python3.11.10/lib/python3.11/site-packages/torch/_dynamo/eval_frame.py:1181: UserWarning: chunk_gated_delta_rule: Input tensor shape suggests potential format mismatch: seq_len (4) < num_heads (8). This may indicate the inputs were passed in head-first format [B, H, T, ...] when head_first=False was specified. Please verify your input tensor format matches the expected shape [B, T, H, ...].
+(Worker_PCP1_TP0 pid=127800)   return fn(*args, **kwargs)
+(Worker_PCP1_TP1 pid=127870) /usr/local/python3.11.10/lib/python3.11/site-packages/torch/_dynamo/eval_frame.py:1181: UserWarning: chunk_gated_delta_rule: Input tensor shape suggests potential format mismatch: seq_len (4) < num_heads (8). This may indicate the inputs were passed in head-first format [B, H, T, ...] when head_first=False was specified. Please verify your input tensor format matches the expected shape [B, T, H, ...].
+(Worker_PCP1_TP1 pid=127870)   return fn(*args, **kwargs)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:957] ======= hidden_states: torch.Size([10, 4096]), restore_idx: tensor([0, 1, 2, 3, 4, 5, 6, 7, 8], device='npu:0', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:957] ======= hidden_states: torch.Size([10, 4096]), restore_idx: tensor([0, 1, 2, 3, 4, 5, 6, 7, 8], device='npu:2', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [model_runner_v1.py:792] === num_scheduled_tokens: [4 9 9 9]
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [model_runner_v1.py:792] === num_scheduled_tokens: [4 9 9 9]
+(Worker_PCP1_TP1 pid=127870) INFO 01-01 15:59:38 [pcp_utils.py:263] >>>prefill_lens [6 6 6] pcp_tokens [4 6 6 6]
+(Worker_PCP0_TP1 pid=127739) INFO 01-01 15:59:38 [pcp_utils.py:263] >>>prefill_lens [6 6 6] pcp_tokens [4 6 6 6]
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:263] >>>prefill_lens [6 6 6] pcp_tokens [4 6 6 6]
+(Worker_PCP1_TP1 pid=127870) INFO 01-01 15:59:38 [pcp_utils.py:282] >>>cu_num_scheduled_tokens 11 [ 4 10 16 22] prefill_cu [np.int32(10), np.int32(16), np.int32(22)] pads [4 3 6 9]
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:263] >>>prefill_lens [6 6 6] pcp_tokens [4 6 6 6]
+(Worker_PCP0_TP1 pid=127739) INFO 01-01 15:59:38 [pcp_utils.py:282] >>>cu_num_scheduled_tokens 11 [ 4 10 16 22] prefill_cu [np.int32(10), np.int32(16), np.int32(22)] pads [4 3 6 9]
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:282] >>>cu_num_scheduled_tokens 11 [ 4 10 16 22] prefill_cu [np.int32(10), np.int32(16), np.int32(22)] pads [4 3 6 9]
+(Worker_PCP1_TP1 pid=127870) INFO 01-01 15:59:38 [pcp_utils.py:288] >>>cu_num_scheduled_tokens [ 4 17 26 35]
+(Worker_PCP0_TP1 pid=127739) INFO 01-01 15:59:38 [pcp_utils.py:288] >>>cu_num_scheduled_tokens [ 4 17 26 35]
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:282] >>>cu_num_scheduled_tokens 11 [ 4 10 16 22] prefill_cu [np.int32(10), np.int32(16), np.int32(22)] pads [4 3 6 9]
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:288] >>>cu_num_scheduled_tokens [ 4 17 26 35]
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:288] >>>cu_num_scheduled_tokens [ 4 17 26 35]
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [model_runner_v1.py:1619] =========== logits_indices_pcp: tensor([ 0,  1,  2,  3, 16, 25, 34], device='npu:2') 
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [model_runner_v1.py:1619] =========== logits_indices_pcp: tensor([ 0,  1,  2,  3, 16, 25, 34], device='npu:0') 
+[rank3]:[W101 15:59:38.663994380 ArgSortKernelNpuOpApi.cpp:41] Warning: Warning: kernel [ArgSort] can not support dtype int32 or int64 on AiCore, Now this kernel is running on AiCpu.If you are more concerned about high-performance execution,please cast dtype to float32. (function operator())
+[rank1]:[W101 15:59:38.664531900 ArgSortKernelNpuOpApi.cpp:41] Warning: Warning: kernel [ArgSort] can not support dtype int32 or int64 on AiCore, Now this kernel is running on AiCpu.If you are more concerned about high-performance execution,please cast dtype to float32. (function operator())
+[rank2]:[W101 15:59:38.666038870 ArgSortKernelNpuOpApi.cpp:41] Warning: Warning: kernel [ArgSort] can not support dtype int32 or int64 on AiCore, Now this kernel is running on AiCpu.If you are more concerned about high-performance execution,please cast dtype to float32. (function operator())
+[rank0]:[W101 15:59:38.666284630 ArgSortKernelNpuOpApi.cpp:41] Warning: Warning: kernel [ArgSort] can not support dtype int32 or int64 on AiCore, Now this kernel is running on AiCpu.If you are more concerned about high-performance execution,please cast dtype to float32. (function operator())
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:957] ======= hidden_states: torch.Size([38, 4096]), restore_idx: tensor([ 0,  1,  2,  3, 19, 20, 21, 22,  4,  5,  6,  7,  8, 23, 24, 25, 26,  9,
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:957]         10, 11, 12, 13, 27, 28, 29, 30, 14, 15, 16, 17, 18, 31, 32, 33, 34],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:957]        device='npu:0', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:957] ======= hidden_states: torch.Size([38, 4096]), restore_idx: tensor([ 0,  1,  2,  3, 19, 20, 21, 22,  4,  5,  6,  7,  8, 23, 24, 25, 26,  9,
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:957]         10, 11, 12, 13, 27, 28, 29, 30, 14, 15, 16, 17, 18, 31, 32, 33, 34],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:957]        device='npu:2', dtype=torch.int32)
+[rank2]:[W101 15:59:38.075830800 ToKernelNpu.cpp:40] Warning: Device do not support double dtype now, dtype cast replace with float. (function operator())
+[rank0]:[W101 15:59:38.076705650 ToKernelNpu.cpp:40] Warning: Device do not support double dtype now, dtype cast replace with float. (function operator())
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188] ============ bonus_logits_indices: tensor([3, 4, 5, 6], device='npu:2', dtype=torch.int32), bonus_logits: tensor([[10.0000,  5.2188,  5.3750,  ..., -2.1562, -2.1562, -2.1562],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [10.5625,  7.2500,  4.0000,  ..., -1.8516, -1.8516, -1.8516],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [10.5625,  7.2500,  4.0000,  ..., -1.8516, -1.8516, -1.8516],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [10.5625,  7.2500,  4.0000,  ..., -1.8516, -1.8516, -1.8516]],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188]        device='npu:2', dtype=torch.bfloat16)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388] ========== draft_token_ids: tensor([13, 13, 13], device='npu:2', dtype=torch.int32), bonus_token_ids: tensor([[271],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [264],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [264],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [264]], device='npu:2', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188] ============ bonus_logits_indices: tensor([3, 4, 5, 6], device='npu:0', dtype=torch.int32), bonus_logits: tensor([[10.0000,  5.2188,  5.3750,  ..., -2.1562, -2.1562, -2.1562],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [10.5625,  7.2500,  4.0000,  ..., -1.8516, -1.8516, -1.8516],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [10.5625,  7.2500,  4.0000,  ..., -1.8516, -1.8516, -1.8516],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [10.5625,  7.2500,  4.0000,  ..., -1.8516, -1.8516, -1.8516]],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188]        device='npu:0', dtype=torch.bfloat16)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388] ========== draft_token_ids: tensor([13, 13, 13], device='npu:0', dtype=torch.int32), bonus_token_ids: tensor([[271],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [264],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [264],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [264]], device='npu:0', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:496] ========== 111 output_token_ids: tensor([[3296,   -1,   -1,   -1],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [ 264,   -1,   -1,   -1],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [ 264,   -1,   -1,   -1],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [ 264,   -1,   -1,   -1]], device='npu:2', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:496] ========== 111 output_token_ids: tensor([[3296,   -1,   -1,   -1],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [ 264,   -1,   -1,   -1],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [ 264,   -1,   -1,   -1],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [ 264,   -1,   -1,   -1]], device='npu:0', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [model_runner_v1.py:792] === num_scheduled_tokens: [4 4 4 4]
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [model_runner_v1.py:792] === num_scheduled_tokens: [4 4 4 4]
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [model_runner_v1.py:1619] =========== logits_indices_pcp: tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [model_runner_v1.py:1619]        device='npu:0') 
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [model_runner_v1.py:1619] =========== logits_indices_pcp: tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [model_runner_v1.py:1619]        device='npu:2') 
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [acl_graph.py:259] Replaying aclgraph
+[rank0]:[W101 15:59:38.165793010 NPUCachingAllocator.cpp:3429] Warning: Tensor not is not allocated by NPUCachingAllocator, skip eraseStream. (function operator())
+[rank3]:[W101 15:59:38.166122420 NPUCachingAllocator.cpp:3429] Warning: Tensor not is not allocated by NPUCachingAllocator, skip eraseStream. (function operator())
+[rank1]:[W101 15:59:38.166750610 NPUCachingAllocator.cpp:3429] Warning: Tensor not is not allocated by NPUCachingAllocator, skip eraseStream. (function operator())
+[rank2]:[W101 15:59:38.167287010 NPUCachingAllocator.cpp:3429] Warning: Tensor not is not allocated by NPUCachingAllocator, skip eraseStream. (function operator())
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:957] ======= hidden_states: torch.Size([32, 4096]), restore_idx: tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17,
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:957]         18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:957]        device='npu:0', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:957] ======= hidden_states: torch.Size([32, 4096]), restore_idx: tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17,
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:957]         18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:957]        device='npu:2', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188] ============ bonus_logits_indices: tensor([ 3,  7, 11, 15], device='npu:0', dtype=torch.int32), bonus_logits: tensor([[ 8.2500,  4.4062,  4.0938,  ..., -3.5625, -3.5625, -3.5625],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [12.8125,  9.7500,  5.9688,  ..., -1.6016, -1.6016, -1.6016],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [14.5625, 12.0000,  7.4062,  ..., -3.1562, -3.1562, -3.1562],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [13.3125, 11.1875,  6.0000,  ..., -3.4844, -3.4844, -3.4844]],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188]        device='npu:0', dtype=torch.bfloat16)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388] ========== draft_token_ids: tensor([  13,   13,   13,  261,  261,  261, 3296, 3296, 3296,  310,  310,  310],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388]        device='npu:0', dtype=torch.int32), bonus_token_ids: tensor([[ 271],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [3296],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [ 271],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [ 271]], device='npu:0', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:496] ========== 111 output_token_ids: tensor([[    13, 248046,     -1,     -1],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [  3296,     -1,     -1,     -1],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [  3296,     13,     -1,     -1],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [  3296,     -1,     -1,     -1]], device='npu:0', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188] ============ bonus_logits_indices: tensor([ 3,  7, 11, 15], device='npu:2', dtype=torch.int32), bonus_logits: tensor([[ 8.2500,  4.4062,  4.0938,  ..., -3.5625, -3.5625, -3.5625],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [12.8125,  9.7500,  5.9688,  ..., -1.6016, -1.6016, -1.6016],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [14.5625, 12.0000,  7.4062,  ..., -3.1562, -3.1562, -3.1562],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [13.3125, 11.1875,  6.0000,  ..., -3.4844, -3.4844, -3.4844]],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188]        device='npu:2', dtype=torch.bfloat16)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388] ========== draft_token_ids: tensor([  13,   13,   13,  261,  261,  261, 3296, 3296, 3296,  310,  310,  310],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388]        device='npu:2', dtype=torch.int32), bonus_token_ids: tensor([[ 271],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [3296],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [ 271],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [ 271]], device='npu:2', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:496] ========== 111 output_token_ids: tensor([[    13, 248046,     -1,     -1],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [  3296,     -1,     -1,     -1],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [  3296,     13,     -1,     -1],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [  3296,     -1,     -1,     -1]], device='npu:2', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [model_runner_v1.py:792] === num_scheduled_tokens: [4 4 4]
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [model_runner_v1.py:1619] =========== logits_indices_pcp: tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11], device='npu:0') 
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [model_runner_v1.py:792] === num_scheduled_tokens: [4 4 4]
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [model_runner_v1.py:1619] =========== logits_indices_pcp: tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11], device='npu:2') 
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:957] ======= hidden_states: torch.Size([24, 4096]), restore_idx: tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17,
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:957]         18, 19, 20, 21, 22, 23], device='npu:0', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:957] ======= hidden_states: torch.Size([24, 4096]), restore_idx: tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17,
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:957]         18, 19, 20, 21, 22, 23], device='npu:2', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188] ============ bonus_logits_indices: tensor([ 3,  7, 11], device='npu:0', dtype=torch.int32), bonus_logits: tensor([[ 6.4375,  4.7188,  7.5625,  ..., -3.8594, -3.8594, -3.8594],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [ 7.9062,  5.0312,  7.4375,  ..., -3.2500, -3.2500, -3.2500],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [ 6.3125,  5.5000,  9.1875,  ..., -3.9844, -3.9844, -3.9844]],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188]        device='npu:0', dtype=torch.bfloat16)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188] ============ bonus_logits_indices: tensor([ 3,  7, 11], device='npu:2', dtype=torch.int32), bonus_logits: tensor([[ 6.4375,  4.7188,  7.5625,  ..., -3.8594, -3.8594, -3.8594],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [ 7.9062,  5.0312,  7.4375,  ..., -3.2500, -3.2500, -3.2500],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188]         [ 6.3125,  5.5000,  9.1875,  ..., -3.9844, -3.9844, -3.9844]],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188]        device='npu:2', dtype=torch.bfloat16)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388] ========== draft_token_ids: tensor([ 13,   0,   0, 198,   0,   0,  13,   0,   0], device='npu:0',
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388]        dtype=torch.int32), bonus_token_ids: tensor([[271],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [271],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [271]], device='npu:0', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388] ========== draft_token_ids: tensor([ 13,   0,   0, 198,   0,   0,  13,   0,   0], device='npu:2',
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388]        dtype=torch.int32), bonus_token_ids: tensor([[271],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [271],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388]         [271]], device='npu:2', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:496] ========== 111 output_token_ids: tensor([[    13, 248046,     -1,     -1],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [    13,     -1,     -1,     -1],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [248046,     -1,     -1,     -1]], device='npu:0', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:496] ========== 111 output_token_ids: tensor([[    13, 248046,     -1,     -1],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [    13,     -1,     -1,     -1],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:496]         [248046,     -1,     -1,     -1]], device='npu:2', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [model_runner_v1.py:792] === num_scheduled_tokens: [4]
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [model_runner_v1.py:792] === num_scheduled_tokens: [4]
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [model_runner_v1.py:1619] =========== logits_indices_pcp: tensor([0, 1, 2, 3], device='npu:0') 
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [model_runner_v1.py:1619] =========== logits_indices_pcp: tensor([0, 1, 2, 3], device='npu:2') 
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:957] ======= hidden_states: torch.Size([8, 4096]), restore_idx: tensor([0, 1, 2, 3, 4, 5, 6, 7], device='npu:0', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:957] ======= hidden_states: torch.Size([8, 4096]), restore_idx: tensor([0, 1, 2, 3, 4, 5, 6, 7], device='npu:2', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188] ============ bonus_logits_indices: tensor([3], device='npu:0', dtype=torch.int32), bonus_logits: tensor([[ 8.0000,  5.5938,  9.0625,  ..., -3.7812, -3.7812, -3.7812]],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188]        device='npu:0', dtype=torch.bfloat16)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188] ============ bonus_logits_indices: tensor([3], device='npu:2', dtype=torch.int32), bonus_logits: tensor([[ 8.0000,  5.5938,  9.0625,  ..., -3.7812, -3.7812, -3.7812]],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188]        device='npu:2', dtype=torch.bfloat16)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388] ========== draft_token_ids: tensor([198,   0,   0], device='npu:0', dtype=torch.int32), bonus_token_ids: tensor([[271]], device='npu:0', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388] ========== draft_token_ids: tensor([198,   0,   0], device='npu:2', dtype=torch.int32), bonus_token_ids: tensor([[271]], device='npu:2', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:496] ========== 111 output_token_ids: tensor([[198,   0, 271,  -1]], device='npu:0', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:496] ========== 111 output_token_ids: tensor([[198,   0, 271,  -1]], device='npu:2', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [model_runner_v1.py:792] === num_scheduled_tokens: [4]
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [model_runner_v1.py:792] === num_scheduled_tokens: [4]
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [model_runner_v1.py:1619] =========== logits_indices_pcp: tensor([0, 1, 2, 3], device='npu:0') 
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [model_runner_v1.py:1619] =========== logits_indices_pcp: tensor([0, 1, 2, 3], device='npu:2') 
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [pcp_utils.py:957] ======= hidden_states: torch.Size([8, 4096]), restore_idx: tensor([0, 1, 2, 3, 4, 5, 6, 7], device='npu:2', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [pcp_utils.py:957] ======= hidden_states: torch.Size([8, 4096]), restore_idx: tensor([0, 1, 2, 3, 4, 5, 6, 7], device='npu:0', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188] ============ bonus_logits_indices: tensor([3], device='npu:0', dtype=torch.int32), bonus_logits: tensor([[ 2.7344,  0.4473,  8.1250,  ..., -2.5000, -2.5000, -2.5000]],
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:188]        device='npu:0', dtype=torch.bfloat16)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188] ============ bonus_logits_indices: tensor([3], device='npu:2', dtype=torch.int32), bonus_logits: tensor([[ 2.7344,  0.4473,  8.1250,  ..., -2.5000, -2.5000, -2.5000]],
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:188]        device='npu:2', dtype=torch.bfloat16)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:388] ========== draft_token_ids: tensor([332,   0,   0], device='npu:2', dtype=torch.int32), bonus_token_ids: tensor([[271]], device='npu:2', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:388] ========== draft_token_ids: tensor([332,   0,   0], device='npu:0', dtype=torch.int32), bonus_token_ids: tensor([[271]], device='npu:0', dtype=torch.int32)
+(Worker_PCP0_TP0 pid=127711) INFO 01-01 15:59:38 [rejection_sampler.py:496] ========== 111 output_token_ids: tensor([[248046,     -1,     -1,     -1]], device='npu:0', dtype=torch.int32)
+(Worker_PCP1_TP0 pid=127800) INFO 01-01 15:59:38 [rejection_sampler.py:496] ========== 111 output_token_ids: tensor([[248046,     -1,     -1,     -1]], device='npu:2', dtype=torch.int32)
+
+
+
+curl http://0.0.0.0:8888/v1/completions   -H "Content-Type: application/json"   -d '{
+    "model": "qwen3.5",
+    "prompt": ["To be or not to be, it is","To be or not to be, it is","To be or not to be, it is","To be or not to be, it is"],
+    "max_tokens": 50,
+    "temperature": 0
+  }'
+{"id":"cmpl-926de8298e61bbc0","object":"text_completion","created":946713577,"model":"qwen3.5","choices":[{"index":0,"text":" a question.","logprobs":null,"finish_reason":"stop","stop_reason":null,"token_ids":null,"prompt_logprobs":null,"prompt_token_ids":null,"routed_experts":null},{"index":1,"text":" a question.\n!\n\n","logprobs":null,"finish_reason":"stop","stop_reason":null,"token_ids":null,"prompt_logprobs":null,"prompt_token_ids":null,"routed_experts":null},{"index":2,"text":" a question.","logprobs":null,"finish_reason":"stop","stop_reason":null,"token_ids":null,"prompt_logprobs":null,"prompt_token_ids":null,"routed_experts":null},{"index":3,"text":" a question.","logprobs":null,"finish_reason":"stop","stop_reason":null,"token_ids":null,"prompt_logprobs":null,"prompt_token_ids":null,"routed_experts":null}],"service_tier":null,"system_fingerprint":"vllm-0.22.1-tp2-d859a394","usage":{"prompt_tokens":36,"total_tokens":55,"completion_tokens":19,"prompt_tokens_details":null},"kv_transfer_params":null}
