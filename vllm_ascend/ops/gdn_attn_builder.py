@@ -98,6 +98,84 @@ class GDNSpecDecodeMetadata:
     actual_seq_lengths: torch.Tensor
 
 
+@dataclass
+class GDNCausalConv1dHostMetadata:
+    query_start_loc_cpu: torch.Tensor
+    cache_indices_cpu: torch.Tensor
+    has_initial_state_cpu: torch.Tensor | None
+
+
+@dataclass
+class GDNSpecCausalConv1dHostMetadata:
+    query_start_loc_cpu: torch.Tensor
+    cache_indices_cpu: torch.Tensor
+    num_accepted_tokens_cpu: torch.Tensor
+
+
+@dataclass
+class GDNPrefillHostMetadata:
+    causal_conv1d: GDNCausalConv1dHostMetadata
+
+
+@dataclass
+class GDNDecodeHostMetadata:
+    causal_conv1d: GDNCausalConv1dHostMetadata
+
+
+@dataclass
+class GDNSpecDecodeHostMetadata:
+    spec_causal_conv1d: GDNSpecCausalConv1dHostMetadata
+
+
+def _first_cache_index_column(cache_indices: torch.Tensor) -> torch.Tensor:
+    return cache_indices[:, 0] if cache_indices.dim() == 2 else cache_indices
+
+
+def _to_cpu_snapshot(tensor: torch.Tensor | None) -> torch.Tensor | None:
+    if tensor is None:
+        return None
+    return tensor.detach().to(device="cpu", non_blocking=False)
+
+
+def _attach_host_causal_conv1d_metadata(attn_metadata: GDNAttentionMetadata) -> GDNAttentionMetadata:
+    """Snapshot value-dependent metadata for causal-conv graph replay."""
+    attn_metadata.non_spec_prefill_host_meta = None
+    prefill_meta = getattr(attn_metadata, "non_spec_prefill_metadata", None)
+    if prefill_meta is not None:
+        causal_meta = prefill_meta.causal_conv1d
+        attn_metadata.non_spec_prefill_host_meta = GDNPrefillHostMetadata(
+            causal_conv1d=GDNCausalConv1dHostMetadata(
+                query_start_loc_cpu=_to_cpu_snapshot(causal_meta.query_start_loc),
+                cache_indices_cpu=_to_cpu_snapshot(_first_cache_index_column(causal_meta.cache_indices)),
+                has_initial_state_cpu=_to_cpu_snapshot(causal_meta.initial_state_mode),
+            ),
+        )
+
+    attn_metadata.non_spec_decode_host_meta = None
+    decode_meta = getattr(attn_metadata, "non_spec_decode_metadata", None)
+    if decode_meta is not None:
+        causal_meta = decode_meta.causal_conv1d
+        attn_metadata.non_spec_decode_host_meta = GDNDecodeHostMetadata(
+            causal_conv1d=GDNCausalConv1dHostMetadata(
+                query_start_loc_cpu=_to_cpu_snapshot(causal_meta.query_start_loc),
+                cache_indices_cpu=_to_cpu_snapshot(_first_cache_index_column(causal_meta.cache_indices)),
+                has_initial_state_cpu=None,
+            ),
+        )
+
+    attn_metadata.spec_decode_host_meta = None
+    spec_meta = getattr(attn_metadata, "spec_decode_metadata", None)
+    if spec_meta is not None:
+        causal_meta = spec_meta.spec_causal_conv1d
+        attn_metadata.spec_decode_host_meta = GDNSpecDecodeHostMetadata(
+            spec_causal_conv1d=GDNSpecCausalConv1dHostMetadata(
+                query_start_loc_cpu=_to_cpu_snapshot(causal_meta.query_start_loc),
+                cache_indices_cpu=_to_cpu_snapshot(_first_cache_index_column(causal_meta.cache_indices)),
+                num_accepted_tokens_cpu=_to_cpu_snapshot(causal_meta.num_accepted_tokens),
+            ),
+        )
+    return attn_metadata
+
 def _build_actual_seq_lengths(
     query_start_loc: torch.Tensor,
     num_sequences: int,
@@ -756,10 +834,11 @@ class AscendGDNAttentionMetadataBuilder(GDNAttentionMetadataBuilder):
         attn_metadata = self._attach_spec_decode_metadata(
             attn_metadata,
         )
-        return self._attach_non_spec_decode_metadata(
+        attn_metadata = self._attach_non_spec_decode_metadata(
             attn_metadata,
             non_spec_conv1d_cache_indices,
         )
+        return _attach_host_causal_conv1d_metadata(attn_metadata)
 
     def _build_prefill_has_initial_state_and_causal_conv1d_meta(
         self,
