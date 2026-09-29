@@ -159,8 +159,17 @@ def _prepare_dflash_inputs_kernel(
     ctx_pos = tl.load(target_positions_ptr + ctx_pos_idx, mask=ctx_valid_mask, other=0)
     # Text-only: scalar positions are linear KV indices; multimodal/M-RoPE is unsupported.
     ctx_slot = _dflash_local_slot(
-        ctx_pos, block_table_ptr, block_table_stride, req_idx, ctx_valid_mask,
-        physical_block_size, block_size, cp_rank, CP_SIZE, CP_INTERLEAVE, PAD_SLOT_ID,
+        ctx_pos,
+        block_table_ptr,
+        block_table_stride,
+        req_idx,
+        ctx_valid_mask,
+        physical_block_size,
+        block_size,
+        cp_rank,
+        CP_SIZE,
+        CP_INTERLEAVE,
+        PAD_SLOT_ID,
     )
 
     tl.store(out_context_positions_ptr + ctx_pos_idx, ctx_pos, mask=ctx_mask)
@@ -196,8 +205,17 @@ def _prepare_dflash_inputs_kernel(
     input_id = tl.where(query_off == 0, bonus_token, parallel_drafting_token_id)
 
     q_slot = _dflash_local_slot(
-        query_pos, block_table_ptr, block_table_stride, req_idx, query_mask,
-        physical_block_size, block_size, cp_rank, CP_SIZE, CP_INTERLEAVE, PAD_SLOT_ID,
+        query_pos,
+        block_table_ptr,
+        block_table_stride,
+        req_idx,
+        query_mask,
+        physical_block_size,
+        block_size,
+        cp_rank,
+        CP_SIZE,
+        CP_INTERLEAVE,
+        PAD_SLOT_ID,
     )
 
     tl.store(out_input_ids_ptr + query_idx, input_id, mask=query_mask)
@@ -314,6 +332,9 @@ def prepare_dflash_inputs_triton(
     num_reqs = input_batch.num_reqs
     assert num_reqs > 0
 
+    if physical_block_size <= 0 or block_size <= 0 or physical_block_size % block_size != 0:
+        raise ValueError("The physical KV block size must be positive and divisible by the kernel block size.")
+
     max_target_query_len = int(input_batch.num_scheduled_tokens.max())
 
     init_device_properties_triton()
@@ -331,13 +352,10 @@ def prepare_dflash_inputs_triton(
     )
 
     max_ctx_per_worker = triton.cdiv(max_target_query_len, workers_per_req)
-    block_size_kernel = min(
+    context_tile_size = min(
         _MAX_CONTEXT_BLOCK_SIZE,
         triton.next_power_of_2(max(2, max_ctx_per_worker)),
     )
-
-    if physical_block_size % block_size != 0:
-        raise ValueError("The physical KV block size must be divisible by the kernel block size.")
 
     _prepare_dflash_inputs_kernel[(num_reqs, workers_per_req)](
         input_buffers.input_ids,
@@ -376,7 +394,7 @@ def prepare_dflash_inputs_triton(
         PAD_SLOT_ID=PAD_SLOT_ID,
         CP_SIZE=cp_size,
         CP_INTERLEAVE=cp_interleave,
-        BLOCK_SIZE=block_size_kernel,
+        BLOCK_SIZE=context_tile_size,
         QUERY_BLOCK_SIZE=_QUERY_BLOCK_SIZE,
         SAMPLE_BLOCK_SIZE=_SAMPLE_BLOCK_SIZE,
         REQUEST_PADDING_BLOCK_SIZE=_REQUEST_PADDING_BLOCK_SIZE,

@@ -10,6 +10,7 @@ from vllm.config import VllmConfig, get_layers_from_vllm_config
 from vllm.config.compilation import CUDAGraphMode
 from vllm.model_executor.layers.attention_layer_base import AttentionLayerBase
 from vllm.v1.attention.backend import AttentionBackend
+from vllm.v1.worker.gpu.block_table import BlockTables
 from vllm.v1.worker.gpu.cudagraph_utils import BatchExecutionDescriptor
 from vllm.v1.worker.gpu.input_batch import InputBatch, InputBuffers
 from vllm.v1.worker.gpu.spec_decode.dflash import speculator as dflash_speculator
@@ -18,9 +19,21 @@ from vllm.v1.worker.gpu.spec_decode.dflash.speculator import DFlashSpeculator
 from vllm_ascend.ops.triton.v2.spec_decode.prepare_dflash_inputs import prepare_dflash_inputs_triton
 from vllm_ascend.worker.v2.attn_utils import build_attn_metadata_wrapper
 
+# Positional index of block_table in upstream DFlash prepare_dflash_inputs.
+_BLOCK_TABLE_ARG_INDEX = 16
 
-def prepare_dflash_inputs_factory(physical_block_size: int) -> Callable[..., None]:
+
+def prepare_dflash_inputs_factory(block_tables: BlockTables) -> Callable[..., None]:
+    physical_sizes_by_table = {
+        id(table): block_tables.block_sizes[gid] for gid, table in enumerate(block_tables.input_block_tables)
+    }
+
     def prepare_with_block_size(*args: Any, **kwargs: Any) -> None:
+        table = args[_BLOCK_TABLE_ARG_INDEX] if len(args) > _BLOCK_TABLE_ARG_INDEX else kwargs["block_table"]
+        try:
+            physical_block_size = physical_sizes_by_table[id(table)]
+        except KeyError as exc:
+            raise ValueError("DFlash received a block table outside its KV cache groups") from exc
         prepare_dflash_inputs(*args, **kwargs, physical_block_size=physical_block_size)
 
     return prepare_with_block_size
@@ -115,9 +128,7 @@ class AscendDFlashSpeculator(DFlashSpeculator):
                 attn_backends[layer_name] = attn_layers[layer_name].get_attn_backend()
 
         self.attn_backends = attn_backends
-        dflash_speculator.prepare_dflash_inputs = prepare_dflash_inputs_factory(
-            self.vllm_config.cache_config.block_size
-        )
+        dflash_speculator.prepare_dflash_inputs = prepare_dflash_inputs_factory(self.block_tables)
 
     def propose(
         self,
