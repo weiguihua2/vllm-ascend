@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import sys
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from collections.abc import Iterable, Mapping
 from math import lcm
 from typing import cast
@@ -104,20 +104,16 @@ def _manager_spec(spec: KVCacheSpec) -> KVCacheSpec:
 
 
 class _GroupStableBlockPool(BlockPool):
-    """Keep packed physical pages in the cache group that first owns them.
-
-    A5 V4.1 cache groups are different typed views over the same physical page
-    slots. Reassigning a recycled page to another group is not graph-safe, so
-    free pages are reused only by their owning group; untouched pages remain
-    available to every group.
-    """
+    """Keep packed A5 physical pages in the cache group that first owns them."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._owners = [-1] * self.num_gpu_blocks
         self._unowned = deque(self.blocks[1:])
-        self._free_by_group: dict[int, deque[KVCacheBlock]] = defaultdict(deque)
-        self._queued_by_group: dict[int, set[int]] = defaultdict(set)
+        # Dict insertion order tracks the age of free blocks. Removing a
+        # touched block also removes its queue entry, so re-freeing it cannot
+        # revive a stale entry and evict the newly cached prefix first.
+        self._free_by_group: dict[int, OrderedDict[int, KVCacheBlock]] = defaultdict(OrderedDict)
 
     @staticmethod
     def _is_free(block: KVCacheBlock) -> bool:
@@ -133,17 +129,15 @@ class _GroupStableBlockPool(BlockPool):
             return []
         preferred: list[KVCacheBlock] = []
         group_queue = self._free_by_group[group_id]
-        queued = self._queued_by_group[group_id]
-        while group_queue and len(preferred) < num_blocks:
-            block = group_queue.popleft()
-            if block.block_id not in queued:
-                continue
-            queued.remove(block.block_id)
-            if self._is_free(block):
-                preferred.append(block)
+        # Untouched pages have no cached prefix. Take them before evicting
+        # blocks that may still hold a reusable prefix for this group.
         while self._unowned and len(preferred) < num_blocks:
             block = self._unowned.popleft()
             if self._owners[block.block_id] == -1 and self._is_free(block):
+                preferred.append(block)
+        while group_queue and len(preferred) < num_blocks:
+            _, block = group_queue.popitem(last=False)
+            if self._is_free(block):
                 preferred.append(block)
         if len(preferred) != num_blocks:
             raise ValueError(
@@ -165,18 +159,14 @@ class _GroupStableBlockPool(BlockPool):
         super().free_blocks(blocks)
         for block in blocks:
             group_id = self._owners[block.block_id]
-            if group_id < 0 or not self._is_free(block):
-                continue
-            queued = self._queued_by_group[group_id]
-            if block.block_id not in queued:
-                self._free_by_group[group_id].appendleft(block)
-                queued.add(block.block_id)
+            if group_id >= 0 and self._is_free(block):
+                self._free_by_group[group_id].setdefault(block.block_id, block)
 
     def touch(self, blocks: list[KVCacheBlock]) -> None:
         for block in blocks:
             group_id = self._owners[block.block_id]
             if group_id >= 0:
-                self._queued_by_group[group_id].discard(block.block_id)
+                self._free_by_group[group_id].pop(block.block_id, None)
         super().touch(blocks)
 
     def free_blocks_for_group(self, ordered_blocks: Iterable[KVCacheBlock], group_id: int) -> None:
