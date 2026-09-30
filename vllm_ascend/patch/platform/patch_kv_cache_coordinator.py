@@ -7,7 +7,6 @@ from math import lcm
 from typing import cast
 
 import vllm
-import vllm.envs as envs_vllm
 import vllm.v1.core.kv_cache_coordinator as vllm_kv_cache_coordinator
 from vllm.utils.math_utils import cdiv
 from vllm.v1.core.block_pool import BlockPool
@@ -251,7 +250,10 @@ class AscendHybridKVCacheCoordinator(HybridKVCacheCoordinator):
         # behavior. The scheduler always supplies the real value at runtime.
         token_budget = _select_kv_token_budget(max_model_len, max_in_flight_tokens)
         self.max_in_flight_tokens = token_budget
-        self.retention_interval = getattr(envs_vllm, "VLLM_PREFIX_CACHE_RETENTION_INTERVAL", None)
+        # Use the configured retention policy. Reading an absent legacy env
+        # attribute silently selects dense retention and fills the shared
+        # block pool with sliding-window checkpoints under many DP sessions.
+        self.retention_interval = kv_cache_config.prefix_cache_retention_interval
         validate_retention_interval = getattr(
             vllm_kv_cache_coordinator,
             "_validate_prefix_cache_retention_interval",

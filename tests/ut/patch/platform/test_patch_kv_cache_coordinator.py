@@ -131,6 +131,27 @@ def _make_coordinator(
 # ---------------------------------------------------------------------------
 
 
+def test_coordinator_uses_configured_prefix_cache_retention(monkeypatch):
+    monkeypatch.setattr(mod, "BlockPool", _FakeBlockPool)
+    monkeypatch.setattr(mod, "get_manager_for_kv_cache_spec", _fake_manager_factory)
+    kv_cache_config = _hybrid_config()
+    kv_cache_config.prefix_cache_retention_interval = 0
+
+    coordinator = AscendHybridKVCacheCoordinator(
+        kv_cache_config=kv_cache_config,
+        max_model_len=4096,
+        use_eagle=False,
+        enable_caching=True,
+        enable_kv_cache_events=False,
+        dcp_world_size=1,
+        pcp_world_size=1,
+        hash_block_size=HASH_BLOCK_SIZE,
+        scheduler_block_size=HASH_BLOCK_SIZE,
+    )
+
+    assert coordinator.retention_interval == 0
+
+
 def test_eagle_fallback_flags_only_full_attention_group(monkeypatch):
     coordinator = _make_coordinator(monkeypatch, use_eagle=True)
     # Only the FA group is flagged; the mamba group stays out.
