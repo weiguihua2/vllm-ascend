@@ -39,7 +39,6 @@
 #     --host 0.0.0.0 --port 9000 --workers 2 \
 #     --prefiller-hosts 127.0.0.1 127.0.0.1 \
 #     --prefiller-ports 8100 8101 \
-#     --prefill-dp-size 4 \
 #     --decoder-hosts 127.0.0.1 127.0.0.1 \
 #     --decoder-ports 8200 8201
 #
@@ -117,7 +116,6 @@ import argparse
 import asyncio
 import base64
 import functools
-import hashlib
 import heapq
 import ipaddress
 import json
@@ -387,23 +385,8 @@ class SharedProxyScheduler:
         *,
         active_tokens: bool = False,
         kv_cache: bool = False,
-        affinity_key: str | None = None,
     ) -> dict[str, Any]:
-        if role is ServerRole.PREFILL and affinity_key:
-            pool = self._pool(role)
-            candidates = [key for key in pool.servers if key not in pool.tainted]
-            if not candidates:
-                candidates = list(pool.servers)
-            if not candidates:
-                raise RuntimeError("No available prefill servers")
-            key = max(
-                candidates,
-                key=lambda candidate: hashlib.sha256(
-                    f"{affinity_key}\0{candidate}".encode()
-                ).digest(),
-            )
-        else:
-            key = self._pop_valid(role)
+        key = self._pop_valid(role)
         entry = self._pool(role).servers[key]
         if active_tokens:
             entry.active_tokens += load
@@ -430,17 +413,17 @@ class SharedProxyScheduler:
             entry.active_kv_cache = max(0.0, entry.active_kv_cache - load)
         self._push_heap(role, key)
 
-    def begin_request(self, load: float, affinity_key: str | None = None) -> dict[str, Any]:
+    def begin_request(self, load: float) -> dict[str, Any]:
         """Pick a prefiller, reserve KV pressure, and count this as an active request."""
         with self._lock:
-            picked = self._pick_server(ServerRole.PREFILL, load, kv_cache=True, affinity_key=affinity_key)
+            picked = self._pick_server(ServerRole.PREFILL, load, kv_cache=True)
             self.request_num += 1
             return picked
 
-    def reserve_prefill_kv(self, load: float, affinity_key: str | None = None) -> dict[str, Any]:
+    def reserve_prefill_kv(self, load: float) -> dict[str, Any]:
         """Pick a prefiller for recompute without bumping the active request count."""
         with self._lock:
-            return self._pick_server(ServerRole.PREFILL, load, kv_cache=True, affinity_key=affinity_key)
+            return self._pick_server(ServerRole.PREFILL, load, kv_cache=True)
 
     def pick_decoder(self, load: float) -> dict[str, Any]:
         with self._lock:
@@ -691,12 +674,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--prefiller-hosts", type=str, nargs="+", default=["localhost"])
     parser.add_argument("--prefiller-ports", type=int, nargs="+", default=[8001])
-    parser.add_argument(
-        "--prefill-dp-size",
-        type=int,
-        default=1,
-        help="DP ranks per prefiller; pin X-Correlation-ID sessions to one rank when greater than 1",
-    )
     parser.add_argument("--decoder-hosts", type=str, nargs="+", default=["localhost"])
     parser.add_argument("--decoder-ports", type=int, nargs="+", default=[8002])
     parser.add_argument("--max-retries", type=int, default=3, help="Maximum number of retries for HTTP requests")
@@ -728,8 +705,6 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if len(args.prefiller_hosts) != len(args.prefiller_ports):
         raise ValueError("Number of prefiller hosts must match number of prefiller ports")
-    if args.prefill_dp_size < 1:
-        raise ValueError("--prefill-dp-size must be positive")
     if len(args.decoder_hosts) != len(args.decoder_ports):
         raise ValueError("Number of decoder hosts must match number of decoder ports")
     args.prefiller_instances = list(zip(args.prefiller_hosts, args.prefiller_ports))
@@ -867,16 +842,9 @@ async def send_request_to_service(
     request_id: str,
     max_retries: int = 3,
     base_delay: float = 0.2,
-    affinity_key: str | None = None,
-    prefill_dp_size: int = 1,
 ):
     req_data = build_prefill_request(req_data)
     headers = auth_headers(request_id)
-    if affinity_key:
-        headers["X-Correlation-ID"] = affinity_key
-        if prefill_dp_size > 1:
-            rank_hash = hashlib.sha256(affinity_key.encode()).digest()
-            headers["X-data-parallel-rank"] = str(int.from_bytes(rank_hash[:8], "big") % prefill_dp_size)
     max_attempts = max(1, max_retries)
     for attempt in range(1, max_attempts + 1):
         try:
@@ -978,7 +946,6 @@ async def assign_instances(
     request_length: int,
     *,
     is_initial_request: bool,
-    affinity_key: str | None = None,
 ) -> InstanceInfo:
     runtime = get_runtime()
     args = get_global_args()
@@ -986,7 +953,7 @@ async def assign_instances(
     decoder_score = calculate_decode_score(request_length)
     request_id = next_req_id()
     pick_prefill = "begin_request" if is_initial_request else "reserve_prefill_kv"
-    prefiller = await runtime.schedule(pick_prefill, prefiller_score, affinity_key)
+    prefiller = await runtime.schedule(pick_prefill, prefiller_score)
     prefiller_key = prefiller["key"]
 
     try:
@@ -997,8 +964,6 @@ async def assign_instances(
             request_id,
             max_retries=args.max_retries,
             base_delay=args.retry_delay,
-            affinity_key=affinity_key,
-            prefill_dp_size=getattr(args, "prefill_dp_size", 1),
         )
     except (Exception, asyncio.CancelledError):
         await _abort_prefill_selection(runtime, prefiller_key, prefiller_score, is_initial_request=is_initial_request)
@@ -1042,15 +1007,12 @@ async def reassign_instances(
     previous_instance: InstanceInfo,
     *,
     previous_prefiller_kv_released: bool,
-    affinity_key: str | None = None,
 ) -> InstanceInfo:
     runtime = get_runtime()
     if not previous_prefiller_kv_released:
         await runtime.schedule("release_prefill_kv", previous_instance.prefiller_key, previous_instance.prefiller_score)
     await _release_decoder_once(runtime, previous_instance)
-    return await assign_instances(
-        api, req_data, request_length, is_initial_request=False, affinity_key=affinity_key
-    )
+    return await assign_instances(api, req_data, request_length, is_initial_request=False)
 
 
 async def _replay_first_chunk(first_chunk: bytes, gen: Any):
@@ -1071,14 +1033,11 @@ async def handle_completions_impl(api: str, request: Request):
     runtime = get_runtime()
     args = get_global_args()
     request_released = False
-    affinity_key = request.headers.get("x-correlation-id")
     try:
         req_data = await request.json()
         req_body = await request.body()
         request_length = len(req_body)
-        instance_info = await assign_instances(
-            api, req_data, request_length, is_initial_request=True, affinity_key=affinity_key
-        )
+        instance_info = await assign_instances(api, req_data, request_length, is_initial_request=True)
         stream_flag = bool(req_data.get("stream", False))
         chat_flag = "messages" in req_data
 
@@ -1232,7 +1191,6 @@ async def handle_completions_impl(api: str, request: Request):
                                 tmp_request_length,
                                 instance_info,
                                 previous_prefiller_kv_released=released_kv,
-                                affinity_key=affinity_key,
                             )
                             released_kv = False
                             break
