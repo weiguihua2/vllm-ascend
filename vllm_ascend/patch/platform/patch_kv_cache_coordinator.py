@@ -144,9 +144,7 @@ class _GroupStableBlockPool(BlockPool):
                     break
                 if self._owners[block.block_id] != owner or not self._is_free(block):
                     continue
-                has_hash = block.block_hash is not None or bool(
-                    self.cached_block_hashes_by_block.get(block.block_id)
-                )
+                has_hash = block.block_hash is not None or bool(self.cached_block_hashes_by_block.get(block.block_id))
                 if has_hash == cached:
                     preferred.append(block)
 
@@ -158,11 +156,20 @@ class _GroupStableBlockPool(BlockPool):
             for owner in tuple(self._free_by_group):
                 if owner != group_id:
                     add_free(owner, cached=False)
-        add_free(group_id, cached=True)
-        if self._allow_group_reassignment and len(preferred) < num_blocks:
-            for owner in tuple(self._free_by_group):
-                if owner != group_id:
-                    add_free(owner, cached=True)
+        if self._allow_group_reassignment:
+            # Once uncached pages are exhausted, preserve the global free
+            # queue's age order. Preferring this group's cached pages can
+            # erase a live trajectory while older donor caches remain idle.
+            queue = self.free_block_queue
+            block = queue.fake_free_list_head.next_free_block
+            while block is not queue.fake_free_list_tail and len(preferred) < num_blocks:
+                assert block is not None
+                has_hash = block.block_hash is not None or bool(self.cached_block_hashes_by_block.get(block.block_id))
+                if has_hash and self._is_free(block):
+                    preferred.append(block)
+                block = block.next_free_block
+        else:
+            add_free(group_id, cached=True)
 
         if len(preferred) != num_blocks:
             raise ValueError(
