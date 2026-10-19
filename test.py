@@ -31,6 +31,28 @@ Decode requests FULL_DECODE_ONLY but the engine dump reports PIECEWISE.
 
 TASK_ID = "a0081bff-11be-4137-a61c-cb86e2109dec"
 
+# Benchmark UI settings transcribed from the supplied screenshot.
+# These are workload settings; no benchmark results are shown in the image.
+# The request-rate unit is not displayed. Both concurrency fields show 128.
+BENCHMARK_CONFIG = {
+    "source": "codex-clipboard-fa223da8-77f4-4e14-bf0b-47b77bd97f97.png",
+    "dataset": "gsm8k",
+    "input_length": 65536,
+    "output_length": 1024,
+    "request_rate": 2.5,
+    "concurrency": 128,
+    "dataset_rows": 512,
+    "npu_count_mode": "auto",
+    "npu_count": None,
+    "warmup_enabled": False,
+    "prefix_cache_enabled": True,
+    "repeat_rate_percent": 90,
+    "seed_mode": "random",
+    "seed": None,
+    "interface_type": "Chat",
+    "steady_state_recalculation_enabled": False,
+}
+
 PREFILL_ARGUMENTS = {
     "model_tag": "/mnt/share/w00936111/GLM-5.3-W4A4C8-MXFP4-0916",
     "enable_auto_tool_choice": True,
